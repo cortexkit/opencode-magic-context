@@ -19,7 +19,7 @@ export function createToolRegistry(args: {
 }): Record<string, ToolDefinition> {
     const { ctx, pluginConfig } = args;
 
-    if (pluginConfig.magic_context?.enabled !== true) {
+    if (pluginConfig.enabled !== true) {
         return {};
     }
 
@@ -32,13 +32,13 @@ export function createToolRegistry(args: {
         return {};
     }
 
-    const memoryEnabled = pluginConfig.magic_context.memory?.enabled === true;
+    const memoryEnabled = pluginConfig.memory?.enabled === true;
     const projectPath = resolveProjectIdentity(ctx.directory);
 
     return {
         ...createCtxReduceTools({
             db,
-            protectedTags: pluginConfig.magic_context.protected_tags ?? DEFAULT_PROTECTED_TAGS,
+            protectedTags: pluginConfig.protected_tags ?? DEFAULT_PROTECTED_TAGS,
         }),
         ...createCtxNoteTools({ db }),
         ...(memoryEnabled
@@ -47,8 +47,7 @@ export function createToolRegistry(args: {
                       db,
                       projectPath,
                       memoryEnabled: true,
-                      embeddingProvider:
-                          pluginConfig.magic_context.memory?.embedding_provider ?? "transformers",
+                      embeddingProvider: pluginConfig.memory?.embedding_provider ?? "transformers",
                   }),
                   ...createCtxMemoryTools({
                       db,

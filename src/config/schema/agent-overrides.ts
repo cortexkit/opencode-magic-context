@@ -35,9 +35,4 @@ export const AgentOverrideConfigSchema = z.object({
     fallback_models: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
-export const AgentOverridesSchema = z.object({
-    historian: AgentOverrideConfigSchema.optional(),
-});
-
 export type AgentOverrideConfig = z.infer<typeof AgentOverrideConfigSchema> & Partial<AgentConfig>;
-export type AgentOverrides = z.infer<typeof AgentOverridesSchema>;

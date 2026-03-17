@@ -3,12 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { detectConfigFile, parseJsonc } from "../shared/jsonc-parser";
-import { type AgentOverrides, AgentOverridesSchema } from "./schema/agent-overrides";
 import { type MagicContextConfig, MagicContextConfigSchema } from "./schema/magic-context";
 
-export interface MagicContextPluginConfig {
-    magic_context?: MagicContextConfig;
-    agents?: AgentOverrides;
+export interface MagicContextPluginConfig extends MagicContextConfig {
     disabled_hooks?: string[];
     command?: Record<
         string,
@@ -51,11 +48,6 @@ function mergeConfigs(
     return {
         ...base,
         ...override,
-        magic_context: override.magic_context ?? base.magic_context,
-        agents: {
-            ...base.agents,
-            ...override.agents,
-        },
         disabled_hooks: [
             ...new Set([...(base.disabled_hooks ?? []), ...(override.disabled_hooks ?? [])]),
         ],
@@ -67,10 +59,7 @@ function mergeConfigs(
 }
 
 function parsePluginConfig(rawConfig: Record<string, unknown>): MagicContextPluginConfig {
-    const parsedMagicContext = MagicContextConfigSchema.safeParse(
-        rawConfig.magic_context ?? rawConfig,
-    );
-    const parsedAgents = AgentOverridesSchema.safeParse(rawConfig.agents ?? {});
+    const parsed = MagicContextConfigSchema.safeParse(rawConfig);
     const disabledHooks = Array.isArray(rawConfig.disabled_hooks)
         ? rawConfig.disabled_hooks.filter((value): value is string => typeof value === "string")
         : undefined;
@@ -79,9 +68,12 @@ function parsePluginConfig(rawConfig: Record<string, unknown>): MagicContextPlug
             ? (rawConfig.command as MagicContextPluginConfig["command"])
             : undefined;
 
+    if (!parsed.success) {
+        return { disabled_hooks: disabledHooks, command } as MagicContextPluginConfig;
+    }
+
     return {
-        magic_context: parsedMagicContext.success ? parsedMagicContext.data : undefined,
-        agents: parsedAgents.success ? parsedAgents.data : undefined,
+        ...parsed.data,
         disabled_hooks: disabledHooks,
         command,
     };
@@ -95,7 +87,7 @@ export function loadPluginConfig(directory: string): MagicContextPluginConfig {
     const projectConfig =
         projectDetected.format === "none" ? null : loadConfigFile(projectDetected.path);
 
-    let config: MagicContextPluginConfig = {};
+    let config: MagicContextPluginConfig = {} as MagicContextPluginConfig;
 
     if (userConfig) {
         config = mergeConfigs(config, parsePluginConfig(userConfig));

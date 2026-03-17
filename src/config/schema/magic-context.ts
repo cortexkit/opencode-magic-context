@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { AgentOverrideConfigSchema } from "./agent-overrides";
+
 export const DEFAULT_NUDGE_INTERVAL_TOKENS = 10_000;
 export const DEFAULT_EXECUTE_THRESHOLD_PERCENTAGE = 65;
 export const DEFAULT_COMPARTMENT_TOKEN_BUDGET = 20_000;
@@ -9,7 +11,8 @@ export const MagicContextConfigSchema = z
     .object({
         /** Enable magic context (default: false) */
         enabled: z.boolean().default(false),
-        /** Configure historian via agents.historian.* (model, fallback_models, variant, temperature, maxTokens, permission, etc.) */
+        /** Historian agent configuration (model, fallback_models, variant, temperature, maxTokens, permission, etc.) */
+        historian: AgentOverrideConfigSchema.optional(),
         /** Cache TTL: string (e.g. "5m") or per-model object ({ default: "5m", "model-id": "10m" }) */
         cache_ttl: z
             .union([z.string(), z.object({ default: z.string() }).catchall(z.string())])

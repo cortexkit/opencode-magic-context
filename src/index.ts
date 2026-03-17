@@ -9,8 +9,8 @@ import { isOpenCodeAutoCompactionEnabled } from "./shared/opencode-compaction-de
 const plugin: Plugin = async (ctx) => {
     const pluginConfig = loadPluginConfig(ctx.directory);
 
-    if (pluginConfig.magic_context?.enabled && isOpenCodeAutoCompactionEnabled(ctx.directory)) {
-        pluginConfig.magic_context.enabled = false;
+    if (pluginConfig.enabled && isOpenCodeAutoCompactionEnabled(ctx.directory)) {
+        pluginConfig.enabled = false;
     }
 
     const hooks = createSessionHooks({
@@ -68,9 +68,7 @@ const plugin: Plugin = async (ctx) => {
             config.command = commandConfig;
             config.agent = {
                 ...(config.agent ?? {}),
-                ...(pluginConfig.agents?.historian
-                    ? { historian: pluginConfig.agents.historian }
-                    : {}),
+                ...(pluginConfig.historian ? { historian: pluginConfig.historian } : {}),
             };
         },
     };
