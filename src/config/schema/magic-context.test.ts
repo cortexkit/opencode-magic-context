@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
     DEFAULT_COMPARTMENT_TOKEN_BUDGET,
     DEFAULT_HISTORIAN_TIMEOUT_MS,
+    DEFAULT_LOCAL_EMBEDDING_MODEL,
     DEFAULT_NUDGE_INTERVAL_TOKENS,
     type MagicContextConfig,
     MagicContextConfigSchema,
@@ -23,10 +24,13 @@ describe("MagicContextConfigSchema", () => {
                 iteration_nudge_threshold: 15,
                 compartment_token_budget: DEFAULT_COMPARTMENT_TOKEN_BUDGET,
                 historian_timeout_ms: DEFAULT_HISTORIAN_TIMEOUT_MS,
+                embedding: {
+                    provider: "local",
+                    model: DEFAULT_LOCAL_EMBEDDING_MODEL,
+                },
                 memory: {
                     enabled: true,
                     injection_budget_tokens: 4000,
-                    embedding_provider: "transformers",
                     auto_promote: true,
                     retrieval_count_promotion_threshold: 3,
                 },
@@ -55,10 +59,15 @@ describe("MagicContextConfigSchema", () => {
                 iteration_nudge_threshold: 20,
                 compartment_token_budget: 25_000,
                 historian_timeout_ms: 360_000,
+                embedding: {
+                    provider: "openai-compatible",
+                    endpoint: "http://localhost:1234/v1",
+                    model: "text-embedding-3-small",
+                    api_key: "secret-embedding",
+                },
                 memory: {
                     enabled: true,
                     injection_budget_tokens: 4000,
-                    embedding_provider: "transformers",
                     auto_promote: true,
                     retrieval_count_promotion_threshold: 3,
                 },
@@ -135,6 +144,28 @@ describe("MagicContextConfigSchema", () => {
         it("rejects historian_timeout_ms below minimum", () => {
             expect(() =>
                 MagicContextConfigSchema.parse({ historian_timeout_ms: 59_999 }),
+            ).toThrow();
+        });
+
+        it("rejects openai-compatible embedding config without endpoint", () => {
+            expect(() =>
+                MagicContextConfigSchema.parse({
+                    embedding: {
+                        provider: "openai-compatible",
+                        model: "text-embedding-3-small",
+                    },
+                }),
+            ).toThrow();
+        });
+
+        it("rejects openai-compatible embedding config without model", () => {
+            expect(() =>
+                MagicContextConfigSchema.parse({
+                    embedding: {
+                        provider: "openai-compatible",
+                        endpoint: "http://localhost:1234/v1",
+                    },
+                }),
             ).toThrow();
         });
     });

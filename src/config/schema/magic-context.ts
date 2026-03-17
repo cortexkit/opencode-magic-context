@@ -6,6 +6,55 @@ export const DEFAULT_NUDGE_INTERVAL_TOKENS = 10_000;
 export const DEFAULT_EXECUTE_THRESHOLD_PERCENTAGE = 65;
 export const DEFAULT_COMPARTMENT_TOKEN_BUDGET = 20_000;
 export const DEFAULT_HISTORIAN_TIMEOUT_MS = 300_000;
+export const DEFAULT_LOCAL_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
+
+const BaseEmbeddingConfigSchema = z
+    .object({
+        provider: z.enum(["local", "openai-compatible", "off"]).default("local"),
+        model: z.string().optional(),
+        endpoint: z.string().optional(),
+        api_key: z.string().optional(),
+    })
+    .superRefine((data, ctx) => {
+        if (data.provider === "openai-compatible" && !data.endpoint?.trim()) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["endpoint"],
+                message: "endpoint is required when embedding.provider is openai-compatible",
+            });
+        }
+
+        if (data.provider === "openai-compatible" && !data.model?.trim()) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["model"],
+                message: "model is required when embedding.provider is openai-compatible",
+            });
+        }
+    });
+
+export const EmbeddingConfigSchema = BaseEmbeddingConfigSchema.transform((data) => {
+    if (data.provider === "local") {
+        return {
+            provider: "local" as const,
+            model: data.model?.trim() || DEFAULT_LOCAL_EMBEDDING_MODEL,
+        };
+    }
+
+    if (data.provider === "openai-compatible") {
+        const apiKey = data.api_key?.trim();
+        return {
+            provider: "openai-compatible" as const,
+            model: data.model?.trim() ?? "",
+            endpoint: data.endpoint?.trim() ?? "",
+            ...(apiKey ? { api_key: apiKey } : {}),
+        };
+    }
+
+    return { provider: "off" as const };
+});
+
+export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 
 export const MagicContextConfigSchema = z
     .object({
@@ -40,6 +89,11 @@ export const MagicContextConfigSchema = z
         compartment_token_budget: z.number().min(10000).default(DEFAULT_COMPARTMENT_TOKEN_BUDGET),
         /** Timeout for each historian prompt call in milliseconds (default: 300000) */
         historian_timeout_ms: z.number().min(60_000).default(DEFAULT_HISTORIAN_TIMEOUT_MS),
+        /** Embedding provider configuration */
+        embedding: EmbeddingConfigSchema.default({
+            provider: "local",
+            model: DEFAULT_LOCAL_EMBEDDING_MODEL,
+        }),
         /** Cross-session memory configuration */
         memory: z
             .object({
@@ -47,8 +101,6 @@ export const MagicContextConfigSchema = z
                 enabled: z.boolean().default(true),
                 /** Token budget for memory injection on session start (min: 500, max: 20000, default: 4000) */
                 injection_budget_tokens: z.number().min(500).max(20000).default(4000),
-                /** Embedding provider for memory retrieval (default: transformers) */
-                embedding_provider: z.enum(["transformers", "off"]).default("transformers"),
                 /** Automatically promote eligible session facts into memory (default: true) */
                 auto_promote: z.boolean().default(true),
                 /** retrieval_count threshold for promoting memory to permanent status (min: 1, default: 3) */
@@ -57,7 +109,6 @@ export const MagicContextConfigSchema = z
             .default({
                 enabled: true,
                 injection_budget_tokens: 4000,
-                embedding_provider: "transformers",
                 auto_promote: true,
                 retrieval_count_promotion_threshold: 3,
             }),
