@@ -74,6 +74,9 @@ const updateMemorySeenCountStatements = new WeakMap<Database, PreparedStatement>
 const updateMemoryRetrievalCountStatements = new WeakMap<Database, PreparedStatement>();
 const updateMemoryStatusStatements = new WeakMap<Database, PreparedStatement>();
 const updateMemoryVerificationStatements = new WeakMap<Database, PreparedStatement>();
+const updateMemoryContentStatements = new WeakMap<Database, PreparedStatement>();
+const supersededMemoryStatements = new WeakMap<Database, PreparedStatement>();
+const mergeMemoryStatsStatements = new WeakMap<Database, PreparedStatement>();
 const deleteMemoryStatements = new WeakMap<Database, PreparedStatement>();
 const deleteMemoryEmbeddingStatements = new WeakMap<Database, PreparedStatement>();
 const getMemoryCountStatements = new WeakMap<Database, PreparedStatement>();
@@ -257,6 +260,39 @@ function getUpdateMemoryVerificationStatement(db: Database): PreparedStatement {
     return stmt;
 }
 
+function getUpdateMemoryContentStatement(db: Database): PreparedStatement {
+    let stmt = updateMemoryContentStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "UPDATE memories SET content = ?, normalized_hash = ?, updated_at = ? WHERE id = ?",
+        );
+        updateMemoryContentStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getSupersededMemoryStatement(db: Database): PreparedStatement {
+    let stmt = supersededMemoryStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "UPDATE memories SET superseded_by_memory_id = ?, status = 'archived', updated_at = ? WHERE id = ?",
+        );
+        supersededMemoryStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getMergeMemoryStatsStatement(db: Database): PreparedStatement {
+    let stmt = mergeMemoryStatsStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "UPDATE memories SET seen_count = ?, retrieval_count = ?, merged_from = ?, status = ?, updated_at = ? WHERE id = ?",
+        );
+        mergeMemoryStatsStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
 function getDeleteMemoryStatement(db: Database): PreparedStatement {
     let stmt = deleteMemoryStatements.get(db);
     if (!stmt) {
@@ -389,6 +425,37 @@ export function updateMemoryVerification(
         verificationStatus,
         now,
         now,
+        id,
+    );
+}
+
+export function updateMemoryContent(
+    db: Database,
+    id: number,
+    content: string,
+    normalizedHash: string,
+): void {
+    getUpdateMemoryContentStatement(db).run(content, normalizedHash, Date.now(), id);
+}
+
+export function supersededMemory(db: Database, id: number, supersededById: number): void {
+    getSupersededMemoryStatement(db).run(supersededById, Date.now(), id);
+}
+
+export function mergeMemoryStats(
+    db: Database,
+    id: number,
+    seenCount: number,
+    retrievalCount: number,
+    mergedFrom: string,
+    status: MemoryStatus,
+): void {
+    getMergeMemoryStatsStatement(db).run(
+        seenCount,
+        retrievalCount,
+        mergedFrom,
+        status,
+        Date.now(),
         id,
     );
 }

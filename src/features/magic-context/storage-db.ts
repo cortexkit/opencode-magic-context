@@ -14,7 +14,7 @@ function resolveDatabasePath(): { dbDir: string; dbPath: string } {
     return { dbDir, dbPath: join(dbDir, "context.db") };
 }
 
-function initializeDatabase(db: Database): void {
+export function initializeDatabase(db: Database): void {
     db.run("PRAGMA journal_mode=WAL");
     db.run("PRAGMA busy_timeout=5000");
     db.run(`
@@ -104,6 +104,11 @@ function initializeDatabase(db: Database): void {
       memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
       embedding BLOB NOT NULL,
       model_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dream_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     );
 
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(

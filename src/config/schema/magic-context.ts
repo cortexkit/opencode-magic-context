@@ -8,6 +8,28 @@ export const DEFAULT_COMPARTMENT_TOKEN_BUDGET = 20_000;
 export const DEFAULT_HISTORIAN_TIMEOUT_MS = 300_000;
 export const DEFAULT_LOCAL_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
 
+export const DreamingTaskSchema = z.enum(["decay", "consolidate", "mine", "verify", "git", "map"]);
+
+export const DreamingConfigSchema = z
+    .object({
+        enabled: z.boolean().default(false),
+        schedule: z.string().default("02:00-06:00"),
+        max_runtime_minutes: z.number().min(10).default(120),
+        endpoint: z.string().default("http://localhost:1234/v1"),
+        model: z.string().default("qwen3.5-32b"),
+        api_key: z.string().default(""),
+        tasks: z.array(DreamingTaskSchema).default(["decay", "consolidate"]),
+    })
+    .default({
+        enabled: false,
+        schedule: "02:00-06:00",
+        max_runtime_minutes: 120,
+        endpoint: "http://localhost:1234/v1",
+        model: "qwen3.5-32b",
+        api_key: "",
+        tasks: ["decay", "consolidate"],
+    });
+
 const BaseEmbeddingConfigSchema = z
     .object({
         provider: z.enum(["local", "openai-compatible", "off"]).default("local"),
@@ -55,6 +77,38 @@ export const EmbeddingConfigSchema = BaseEmbeddingConfigSchema.transform((data) 
 });
 
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
+export type DreamingConfig = z.infer<typeof DreamingConfigSchema>;
+
+export interface MagicContextConfig {
+    enabled: boolean;
+    historian?: z.infer<typeof AgentOverrideConfigSchema>;
+    cache_ttl: string | { default: string; [modelKey: string]: string };
+    nudge_interval_tokens: number;
+    execute_threshold_percentage: number | { default: number; [modelKey: string]: number };
+    protected_tags: number;
+    auto_drop_tool_age: number;
+    clear_reasoning_age: number;
+    iteration_nudge_threshold: number;
+    compartment_token_budget: number;
+    historian_timeout_ms: number;
+    embedding: EmbeddingConfig;
+    memory: {
+        enabled: boolean;
+        injection_budget_tokens: number;
+        auto_promote: boolean;
+        retrieval_count_promotion_threshold: number;
+    };
+    sidekick: {
+        enabled: boolean;
+        endpoint: string;
+        model: string;
+        api_key: string;
+        max_tool_calls: number;
+        timeout_ms: number;
+        system_prompt?: string;
+    };
+    dreaming?: DreamingConfig;
+}
 
 export const MagicContextConfigSchema = z
     .object({
@@ -131,10 +185,22 @@ export const MagicContextConfigSchema = z
                 max_tool_calls: 3,
                 timeout_ms: 30000,
             }),
+        /** Dreamer maintenance configuration */
+        dreaming: DreamingConfigSchema,
     })
-    .transform((data) => ({
-        ...data,
-        protected_tags: data.protected_tags ?? 5,
-    }));
+    .transform((data): MagicContextConfig => {
+        const { dreaming, ...rest } = data;
+        const config: MagicContextConfig = {
+            ...rest,
+            protected_tags: data.protected_tags ?? 5,
+        };
 
-export type MagicContextConfig = z.infer<typeof MagicContextConfigSchema>;
+        Object.defineProperty(config, "dreaming", {
+            value: dreaming,
+            enumerable: false,
+            writable: true,
+            configurable: true,
+        });
+
+        return config;
+    });

@@ -45,7 +45,7 @@ function mergeConfigs(
     base: MagicContextPluginConfig,
     override: MagicContextPluginConfig,
 ): MagicContextPluginConfig {
-    return {
+    const config: MagicContextPluginConfig = {
         ...base,
         ...override,
         disabled_hooks: [
@@ -56,6 +56,12 @@ function mergeConfigs(
             ...(override.command ?? {}),
         },
     };
+
+    if (base.dreaming || override.dreaming) {
+        config.dreaming = override.dreaming ?? base.dreaming;
+    }
+
+    return config;
 }
 
 function parsePluginConfig(rawConfig: Record<string, unknown>): MagicContextPluginConfig {
@@ -72,11 +78,15 @@ function parsePluginConfig(rawConfig: Record<string, unknown>): MagicContextPlug
         return { disabled_hooks: disabledHooks, command } as MagicContextPluginConfig;
     }
 
-    return {
+    const config: MagicContextPluginConfig = {
         ...parsed.data,
         disabled_hooks: disabledHooks,
         command,
     };
+
+    config.dreaming = parsed.data.dreaming;
+
+    return config;
 }
 
 export function loadPluginConfig(directory: string): MagicContextPluginConfig {
