@@ -97,6 +97,16 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
         (isExplicitFlush ||
             forceMaterialization ||
             (hasPendingUserOps && args.schedulerDecision === "execute" && !alreadyRanThisTurn));
+    if (shouldRunHeuristics) {
+        const reason = isExplicitFlush
+            ? "explicit_flush"
+            : forceMaterialization
+              ? `force_materialization (${args.contextUsage.percentage.toFixed(1)}% >= ${args.forceMaterializationPercentage}%)`
+              : `pending_ops_execute (pendingOps=${pendingOps.length}, scheduler=${args.schedulerDecision})`;
+        log(
+            `[magic-context] heuristics WILL RUN — reason=${reason}, context=${args.contextUsage.percentage.toFixed(1)}%, turn=${args.currentTurnId}`,
+        );
+    }
     if (alreadyRanThisTurn && args.schedulerDecision === "execute" && !isExplicitFlush) {
         log(
             `[magic-context] transform: skipping heuristics (already ran for turn ${args.currentTurnId})`,
@@ -105,9 +115,14 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
     if (compartmentRunning && hasPendingUserOps) {
         log("[magic-context] transform: deferring pending ops — compartment agent in progress");
     }
-
     try {
         if (shouldApplyPendingOps) {
+            const applyReason = isExplicitFlush
+                ? "explicit_flush"
+                : `scheduler_execute (scheduler=${args.schedulerDecision})`;
+            log(
+                `[magic-context] pending ops WILL APPLY — reason=${applyReason}, pendingOps=${pendingOps.length}, context=${args.contextUsage.percentage.toFixed(1)}%`,
+            );
             const pendingCountBefore = pendingOps.length;
             didMutateFromPendingOperations = applyPendingOperations(
                 args.sessionId,
@@ -157,14 +172,23 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
                 logTransformTiming(args.sessionId, "watermarkCleanup", t6);
             }
             const t7 = performance.now();
-            clearOldReasoning(
+            const clearedReasoning = clearOldReasoning(
                 args.messages,
                 args.reasoningByMessage,
                 args.messageTagNumbers,
                 args.clearReasoningAge,
             );
             stripClearedReasoning(args.messages);
-            stripInlineThinking(args.messages, args.messageTagNumbers, args.clearReasoningAge);
+            const strippedInline = stripInlineThinking(
+                args.messages,
+                args.messageTagNumbers,
+                args.clearReasoningAge,
+            );
+            if (clearedReasoning > 0 || strippedInline > 0) {
+                log(
+                    `[magic-context] reasoning cleanup: cleared=${clearedReasoning} inlineStripped=${strippedInline}`,
+                );
+            }
             logTransformTiming(args.sessionId, "clearOldReasoning", t7);
             args.flushedSessions.delete(args.sessionId);
             if (args.currentTurnId) {

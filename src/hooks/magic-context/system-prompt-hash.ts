@@ -60,9 +60,15 @@ export function createSystemPromptHashHandler(deps: {
 
         const previousHash = sessionMeta.systemPromptHash;
         if (previousHash !== 0 && previousHash !== currentHash) {
-            log(`[magic-context] system prompt changed for session ${sessionId}, triggering flush`);
+            log(
+                `[magic-context] system prompt hash changed: ${previousHash} → ${currentHash} (len=${systemContent.length}), triggering flush for session ${sessionId}`,
+            );
             deps.flushedSessions.add(sessionId);
             deps.lastHeuristicsTurnId.delete(sessionId);
+        } else if (previousHash === 0) {
+            log(
+                `[magic-context] system prompt hash initialized: ${currentHash} (len=${systemContent.length}) for session ${sessionId}`,
+            );
         }
 
         if (currentHash !== previousHash) {
