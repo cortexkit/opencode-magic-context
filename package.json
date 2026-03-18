@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target bun --format esm --external @huggingface/transformers --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "test": "bun test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -27,8 +27,9 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^1.2.26",
     "@huggingface/transformers": "^3.5.1",
+    "@opencode-ai/plugin": "^1.2.26",
+    "ai-tokenizer": "^1.0.6",
     "zod": "^4.1.8"
   },
   "devDependencies": {
