@@ -4,6 +4,7 @@ import {
     DEFAULT_NUDGE_INTERVAL_TOKENS,
 } from "../../config/schema/magic-context";
 import type { createCompactionHandler } from "../../features/magic-context/compaction";
+import { resolveProjectIdentity } from "../../features/magic-context/memory/project-identity";
 import type { Scheduler } from "../../features/magic-context/scheduler";
 import {
     getDatabasePersistenceError,
@@ -212,7 +213,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         sidekick: deps.config.sidekick?.enabled
             ? {
                   config: deps.config.sidekick,
-                  projectPath: deps.directory,
+                  projectPath: resolveProjectIdentity(deps.directory),
                   client: deps.client,
                   pendingResults: pendingSidekickResults,
               }
