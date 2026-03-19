@@ -3,8 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const logFile = path.join(os.tmpdir(), "magic-context.log");
+const isTestEnv = process.env.NODE_ENV === "test";
 
 export function log(message: string, data?: unknown): void {
+    if (isTestEnv) return;
     try {
         const timestamp = new Date().toISOString();
         const serialized = data === undefined ? "" : ` ${JSON.stringify(data)}`;
