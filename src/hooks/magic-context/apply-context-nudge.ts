@@ -33,5 +33,10 @@ export function applyContextNudge(
         nudgePlacements,
         sessionId,
     );
-    if (!reinjected) return;
+    if (!reinjected) {
+        log(
+            `[magic-context] preserving anchored nudge without re-anchor to avoid cache bust: session=${sessionId} messageId=${existingPlacement.messageId}`,
+        );
+        return;
+    }
 }

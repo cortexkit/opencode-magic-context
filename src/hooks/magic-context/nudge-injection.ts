@@ -56,11 +56,9 @@ export function reinjectNudgeAtAnchor(
         if (message.info.id !== placement.messageId) continue;
         if (message.info.role !== "assistant") continue;
         if (isMessageDropped(message)) {
-            nudgePlacements.clear(sessionId);
             return false;
         }
         if (hasToolProtocolParts(message)) {
-            nudgePlacements.clear(sessionId);
             return false;
         }
 
@@ -82,7 +80,6 @@ export function reinjectNudgeAtAnchor(
     }
 
     // Anchor message no longer found (deleted/compacted)
-    nudgePlacements.clear(sessionId);
     return false;
 }
 

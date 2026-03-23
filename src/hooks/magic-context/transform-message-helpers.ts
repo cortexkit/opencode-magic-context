@@ -37,25 +37,31 @@ export function findLastUserMessageId(messages: MessageLike[]): string | null {
 export function appendReminderToLatestUserMessage(
     messages: MessageLike[],
     reminder: string,
-): boolean {
+): string | null {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
         if (!isMeaningfulUserMessage(message)) {
             continue;
         }
 
-        for (const part of message.parts) {
-            if (!isTextPart(part)) {
-                continue;
-            }
+        appendReminderToUserMessage(message, reminder);
+        return typeof message.info.id === "string" ? message.info.id : null;
+    }
 
-            if (!part.text.includes(reminder)) {
-                part.text += reminder;
-            }
-            return true;
+    return null;
+}
+
+export function appendReminderToUserMessageById(
+    messages: MessageLike[],
+    messageId: string,
+    reminder: string,
+): boolean {
+    for (const message of messages) {
+        if (message.info.id !== messageId || !isMeaningfulUserMessage(message)) {
+            continue;
         }
 
-        message.parts.unshift({ type: "text", text: reminder.trimStart() });
+        appendReminderToUserMessage(message, reminder);
         return true;
     }
 
@@ -69,4 +75,19 @@ export function countMessagesSinceLastUser(messages: MessageLike[]): number {
         messagesSinceLastUser += 1;
     }
     return messagesSinceLastUser;
+}
+
+function appendReminderToUserMessage(message: MessageLike, reminder: string): void {
+    for (const part of message.parts) {
+        if (!isTextPart(part)) {
+            continue;
+        }
+
+        if (!part.text.includes(reminder)) {
+            part.text += reminder;
+        }
+        return;
+    }
+
+    message.parts.unshift({ type: "text", text: reminder.trimStart() });
 }

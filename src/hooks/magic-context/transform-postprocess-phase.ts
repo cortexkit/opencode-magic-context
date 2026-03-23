@@ -4,6 +4,7 @@ import {
     getPendingOps,
     getPersistedStickyTurnReminder,
     getTopNBySize,
+    setPersistedStickyTurnReminder,
     updateSessionMeta,
 } from "../../features/magic-context/storage";
 import type { SessionMeta, TagEntry } from "../../features/magic-context/types";
@@ -27,6 +28,7 @@ import {
     stripSystemInjectedMessages,
 } from "./strip-content";
 import {
+    appendReminderToUserMessageById,
     appendReminderToLatestUserMessage,
     countMessagesSinceLastUser,
 } from "./transform-message-helpers";
@@ -274,7 +276,31 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
                 "[magic-context] sticky turn reminder cleared — ctx_reduce found in recent messages",
             );
         } else {
-            appendReminderToLatestUserMessage(args.messages, pendingUserTurnReminder);
+            if (pendingUserTurnReminder.messageId) {
+                const reinjected = appendReminderToUserMessageById(
+                    args.messages,
+                    pendingUserTurnReminder.messageId,
+                    pendingUserTurnReminder.text,
+                );
+                if (!reinjected) {
+                    log(
+                        `[magic-context] preserving sticky turn reminder anchor to avoid cache bust: session=${args.sessionId} messageId=${pendingUserTurnReminder.messageId}`,
+                    );
+                }
+            } else {
+                const anchoredMessageId = appendReminderToLatestUserMessage(
+                    args.messages,
+                    pendingUserTurnReminder.text,
+                );
+                if (anchoredMessageId) {
+                    setPersistedStickyTurnReminder(
+                        args.db,
+                        args.sessionId,
+                        pendingUserTurnReminder.text,
+                        anchoredMessageId,
+                    );
+                }
+            }
         }
     }
 
