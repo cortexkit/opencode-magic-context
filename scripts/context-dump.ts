@@ -49,6 +49,7 @@ async function main(): Promise<void> {
 					"  " +
 					bust.parts,
 			)
+			console.log(`    Probable: ${bust.classification} - ${bust.detail}`)
 		}
 	}
 	if (result.pendingOps.length > 0) {

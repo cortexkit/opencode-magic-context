@@ -24,6 +24,10 @@ interface RawSessionMetaRow {
 	is_subagent: number | null
 }
 
+interface RawTimestampRow {
+	ts: number
+}
+
 function isRawPendingOpRow(row: unknown): row is RawPendingOpRow {
 	if (row === null || typeof row !== "object") return false
 	const candidate = row as Record<string, unknown>
@@ -40,6 +44,12 @@ function isRawSessionMetaRow(row: unknown): row is RawSessionMetaRow {
 	if (row === null || typeof row !== "object") return false
 	const candidate = row as Record<string, unknown>
 	return candidate.is_subagent === null || typeof candidate.is_subagent === "number"
+}
+
+function isRawTimestampRow(row: unknown): row is RawTimestampRow {
+	if (row === null || typeof row !== "object") return false
+	const candidate = row as Record<string, unknown>
+	return typeof candidate.ts === "number"
 }
 
 function isRawTagRow(row: unknown): row is RawTagRow {
@@ -70,7 +80,13 @@ function normalizeTagStatus(value: string): ContextTagRow["status"] {
 export function readContextMetadata(
 	contextDbPath: string,
 	sessionId: string,
-): { tags: ContextTagRow[]; pendingOps: PendingOpRow[]; sourceContents: Map<number, string>; isSubagent: boolean } {
+): {
+	tags: ContextTagRow[]
+	pendingOps: PendingOpRow[]
+	sourceContents: Map<number, string>
+	isSubagent: boolean
+	historianWriteTimes: number[]
+} {
 	const db = new Database(contextDbPath, { readonly: true })
 
 	try {
@@ -123,7 +139,26 @@ export function readContextMetadata(
 			// session_meta table may not exist in older databases
 		}
 
-		return { tags, pendingOps, sourceContents, isSubagent }
+		const historianWriteTimes: number[] = []
+		try {
+			const rows = db
+				.prepare(
+					`SELECT ts FROM (
+						SELECT created_at AS ts FROM compartments WHERE session_id = ?
+						UNION
+						SELECT updated_at AS ts FROM session_facts WHERE session_id = ?
+					) ORDER BY ts ASC`,
+				)
+				.all(sessionId, sessionId)
+				.filter(isRawTimestampRow)
+			for (const row of rows) {
+				historianWriteTimes.push(row.ts)
+			}
+		} catch {
+			// historian tables may not exist in older databases
+		}
+
+		return { tags, pendingOps, sourceContents, isSubagent, historianWriteTimes }
 	} finally {
 		db.close(false)
 	}
