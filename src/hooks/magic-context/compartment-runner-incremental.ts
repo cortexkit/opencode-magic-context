@@ -1,7 +1,8 @@
 import {
+    appendCompartments,
     getCompartments,
     getSessionFacts,
-    replaceAllCompartmentState,
+    replaceSessionFacts,
 } from "../../features/magic-context/compartment-storage";
 import { promoteSessionFactsToMemory } from "../../features/magic-context/memory";
 import { resolveProjectIdentity } from "../../features/magic-context/memory/project-identity";
@@ -13,7 +14,7 @@ import { buildCompartmentAgentPrompt } from "./compartment-prompt";
 import { runCompressionPassIfNeeded } from "./compartment-runner-compressor";
 import { queueDropsForCompartmentalizedMessages } from "./compartment-runner-drop-queue";
 import { runValidatedHistorianPass } from "./compartment-runner-historian";
-import { buildExistingStateXml, mergePriorCompartments } from "./compartment-runner-state-xml";
+import { buildExistingStateXml } from "./compartment-runner-state-xml";
 import type { CompartmentRunnerDeps } from "./compartment-runner-types";
 import { validateChunkCoverage, validateStoredCompartments } from "./compartment-runner-validation";
 import { renderMemoryBlock } from "./inject-compartments";
@@ -124,20 +125,18 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
         }
 
         const newCompartments = validatedPass.compartments!;
-        const allCompartments =
-            validatedPass.mode === "full"
-                ? newCompartments
-                : mergePriorCompartments(priorCompartments, newCompartments);
 
-        const nextOffset = (allCompartments[allCompartments.length - 1]?.endMessage ?? 0) + 1;
-        if (nextOffset <= offset) {
+        const lastNewEnd = newCompartments[newCompartments.length - 1]?.endMessage ?? 0;
+        if (lastNewEnd + 1 <= offset) {
             await notifyHistorianIssue(
-                `## Historian alert\n\nHistorian returned invalid compartment output: full-state output made no forward progress beyond raw message ${offset - 1}.\n\nNo new compartments or facts were written. Check the historian model/output and try again.`,
+                `## Historian alert\n\nHistorian returned compartments that made no forward progress beyond raw message ${offset - 1}.\n\nNo new compartments or facts were written. Check the historian model/output and try again.`,
             );
             return;
         }
 
-        replaceAllCompartmentState(db, sessionId, allCompartments, validatedPass.facts ?? []);
+        // Append new compartments (existing stay untouched in DB) and replace facts
+        appendCompartments(db, sessionId, newCompartments);
+        replaceSessionFacts(db, sessionId, validatedPass.facts ?? []);
         promoteSessionFactsToMemory(
             db,
             sessionId,
@@ -145,7 +144,7 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
             validatedPass.facts ?? [],
         );
 
-        const lastCompartmentEnd = allCompartments[allCompartments.length - 1].endMessage;
+        const lastCompartmentEnd = lastNewEnd;
         queueDropsForCompartmentalizedMessages(db, sessionId, lastCompartmentEnd);
 
         // Run compression pass if history block exceeds budget

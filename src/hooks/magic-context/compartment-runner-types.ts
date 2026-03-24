@@ -34,7 +34,6 @@ export interface ValidatedHistorianPassResult {
     ok: boolean;
     compartments?: CandidateCompartment[];
     facts?: Array<{ category: string; content: string }>;
-    mode?: "chunk" | "full";
     error?: string;
 }
 

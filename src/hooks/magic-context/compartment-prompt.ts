@@ -9,7 +9,7 @@ Compartment rules:
 - Do not create compartments for magic-context commands or tool-only noise.
 - If the input ends mid-topic, leave it out and report its first message index in <unprocessed_from>.
 - All compartment start/end ordinals and <unprocessed_from> must use the absolute raw message numbers shown in the input. Never renumber relative to this chunk.
-- Never rewrite, merge, shorten, or otherwise modify existing compartments from prior runs. Emit them exactly as shown in the existing state. Only write NEW compartments for the new messages.
+- Only emit NEW compartments for the new messages. Do not re-emit existing compartments from the existing state.
 - Write comprehensive, detailed compartments. Include file paths, function names, commit hashes, config keys, and values when they matter.
 - Do not list every changed file. Do not narrate tool calls. Do not preserve dead-end exploration beyond a brief clause when needed.
 
@@ -144,14 +144,13 @@ export function buildCompressorPrompt(
 
 export function buildCompartmentAgentPrompt(existingState: string, inputSource: string): string {
     return [
-        "Existing state (emit these compartments unchanged; only normalize facts — they may be stale, narrative, or task-local):",
+        "Existing state (read-only context for continuity and fact normalization — do NOT re-emit these compartments):",
         existingState,
         "",
         "New messages:",
         inputSource,
         "",
-        "Return updated compartments and facts as XML.",
-        "Emit all existing compartments unchanged, then append NEW compartments for the new messages only.",
+        "Return ONLY new compartments for the new messages, plus the full normalized fact list.",
         "Use the exact absolute raw ordinals from the input ranges for every compartment start/end and for <unprocessed_from>.",
         "Rewrite every fact into terse, present-tense operational form. Merge semantic duplicates within each category.",
         "Drop any session fact already covered by a project memory in the existing state.",

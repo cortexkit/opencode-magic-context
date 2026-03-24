@@ -218,10 +218,10 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
                 return `## Magic Recomp — Failed\n\nRecomp failed while rebuilding messages ${chunk.startIndex}-${chunk.endIndex}: ${validatedPass.error}\n\nNothing was written.`;
             }
 
-            candidateCompartments =
-                validatedPass.mode === "full"
-                    ? (validatedPass.compartments ?? [])
-                    : [...candidateCompartments, ...(validatedPass.compartments ?? [])];
+            candidateCompartments = [
+                ...candidateCompartments,
+                ...(validatedPass.compartments ?? []),
+            ];
             candidateFacts = validatedPass.facts ?? [];
             passCount += 1;
             currentTokenBudget = tokenBudget;

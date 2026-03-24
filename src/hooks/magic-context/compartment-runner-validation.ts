@@ -1,8 +1,5 @@
 import { parseCompartmentOutput } from "./compartment-parser";
-import {
-    mapParsedCompartmentsToChunk,
-    mapParsedCompartmentsToSession,
-} from "./compartment-runner-mapping";
+import { mapParsedCompartmentsToChunk } from "./compartment-runner-mapping";
 import type {
     StoredCompartmentRange,
     ValidatedHistorianPassResult,
@@ -45,7 +42,7 @@ function healCompartmentGaps(
 
 export function validateHistorianOutput(
     text: string,
-    sessionId: string,
+    _sessionId: string,
     chunk: {
         startIndex: number;
         endIndex: number;
@@ -62,21 +59,12 @@ export function validateHistorianOutput(
         };
     }
 
-    const mode = parsed.compartments.some(
-        (compartment) => compartment.startMessage < chunk.startIndex,
-    )
-        ? "full"
-        : "chunk";
-
     // Heal gaps between compartments by expanding the previous compartment's endMessage.
     // The historian sometimes skips noise-only message ranges (tool calls, dropped placeholders)
     // which produces valid summaries but invalid contiguous ranges.
     healCompartmentGaps(parsed.compartments, parsed.unprocessedFrom);
 
-    const mapped =
-        mode === "full"
-            ? mapParsedCompartmentsToSession(parsed.compartments, sessionId)
-            : mapParsedCompartmentsToChunk(parsed.compartments, chunk, sequenceOffset);
+    const mapped = mapParsedCompartmentsToChunk(parsed.compartments, chunk, sequenceOffset);
     if (!mapped.ok) {
         return {
             ok: false,
@@ -86,7 +74,7 @@ export function validateHistorianOutput(
 
     const parsedValidationError = validateParsedCompartments(
         parsed.compartments,
-        mode === "full" ? 1 : chunk.startIndex,
+        chunk.startIndex,
         chunk.endIndex,
         parsed.unprocessedFrom,
     );
@@ -99,7 +87,6 @@ export function validateHistorianOutput(
 
     return {
         ok: true,
-        mode,
         compartments: mapped.compartments,
         facts: parsed.facts,
     };

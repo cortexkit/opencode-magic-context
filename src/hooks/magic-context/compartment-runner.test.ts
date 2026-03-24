@@ -357,7 +357,7 @@ describe("executeContextRecomp", () => {
                         parts: [
                             {
                                 type: "text",
-                                text: `<compartment start="1" end="2" title="Pass one">Rewritten summary</compartment>\n<compartment start="3" end="3" title="Pass two">Next summary</compartment>\n<WORKFLOW_RULES>\n* Rewritten fact.\n</WORKFLOW_RULES>`,
+                                text: `<compartment start="3" end="3" title="Pass two">Next summary</compartment>\n<WORKFLOW_RULES>\n* Rewritten fact.\n</WORKFLOW_RULES>`,
                             },
                         ],
                     },
@@ -388,7 +388,7 @@ describe("executeContextRecomp", () => {
             expect.objectContaining({
                 startMessage: 1,
                 endMessage: 2,
-                content: "Rewritten summary",
+                content: "Initial summary",
             }),
             expect.objectContaining({ startMessage: 3, endMessage: 3, content: "Next summary" }),
         ]);
@@ -1012,7 +1012,7 @@ describe("runCompartmentAgent", () => {
         expect(sentPrompt).toContain("[4] A: three");
         expect(sentPrompt).not.toContain("msg_");
         expect(sentPrompt).toContain(
-            "Existing state (emit these compartments unchanged; only normalize facts",
+            "Existing state (read-only context for continuity and fact normalization — do NOT re-emit these compartments):",
         );
         expect(sentPrompt).toContain(
             '<compartment start="1" end="2" title="Earlier &quot;work&quot;">',
@@ -1035,97 +1035,6 @@ describe("runCompartmentAgent", () => {
             body: { parentID: "ses-2", title: "magic-context-compartment" },
             query: { directory: "/tmp/parent-2" },
         });
-    });
-
-    it("accepts historian full-state output that rewrites prior compartments during incremental runs", async () => {
-        useTempDataHome("compartment-runner-full-state-");
-        createOpenCodeDb("ses-full-state", [
-            { id: "m-1", role: "user", text: "zero" },
-            { id: "m-2", role: "assistant", text: "one" },
-            { id: "m-3", role: "user", text: "two" },
-            { id: "m-4", role: "assistant", text: "three" },
-            { id: "m-5", role: "user", text: "protected 1" },
-            { id: "m-6", role: "user", text: "protected 2" },
-            { id: "m-7", role: "user", text: "protected 3" },
-            { id: "m-8", role: "user", text: "protected 4" },
-            { id: "m-9", role: "user", text: "protected 5" },
-        ]);
-        const db = openDatabase();
-        replaceAllCompartments(db, "ses-full-state", [
-            {
-                sequence: 0,
-                startMessage: 1,
-                endMessage: 2,
-                startMessageId: "m-1",
-                endMessageId: "m-2",
-                title: "Earlier work",
-                content: "Old summary",
-            },
-        ]);
-        replaceAllCompartmentState(
-            db,
-            "ses-full-state",
-            [
-                {
-                    sequence: 0,
-                    startMessage: 1,
-                    endMessage: 2,
-                    startMessageId: "m-1",
-                    endMessageId: "m-2",
-                    title: "Earlier work",
-                    content: "Old summary",
-                },
-            ],
-            [{ category: "WORKFLOW_RULES", content: "Old fact." }],
-        );
-
-        const client = {
-            session: {
-                get: mock(async () => ({ data: { directory: "/tmp/parent-full-state" } })),
-                create: mock(async () => ({ data: { id: "ses-agent-full-state" } })),
-                prompt: mock(async () => ({})),
-                messages: mock(async () => ({
-                    data: [
-                        {
-                            info: { role: "assistant", time: { created: 1 } },
-                            parts: [
-                                {
-                                    type: "text",
-                                    text: `<compartment start="1" end="2" title="Earlier work">Rewritten summary</compartment>\n<compartment start="3" end="4" title="Later work">Later summary</compartment>\n<WORKFLOW_RULES>\n* Rewritten fact.\n</WORKFLOW_RULES>`,
-                                },
-                            ],
-                        },
-                    ],
-                })),
-                delete: mock(async () => ({})),
-            },
-        } as unknown as PluginContext["client"];
-
-        await runCompartmentAgent({
-            client,
-            db,
-            sessionId: "ses-full-state",
-            tokenBudget: 10_000,
-            directory: "/tmp",
-        });
-
-        expect(getCompartments(db, "ses-full-state")).toEqual([
-            expect.objectContaining({
-                startMessage: 1,
-                endMessage: 2,
-                title: "Earlier work",
-                content: "Rewritten summary",
-            }),
-            expect.objectContaining({
-                startMessage: 3,
-                endMessage: 4,
-                title: "Later work",
-                content: "Later summary",
-            }),
-        ]);
-        expect(getSessionFacts(db, "ses-full-state")).toEqual([
-            expect.objectContaining({ category: "WORKFLOW_RULES", content: "Rewritten fact." }),
-        ]);
     });
 
     it("queues drops for text, file, and tool tags covered by stored compartments", async () => {
@@ -1212,202 +1121,6 @@ describe("runCompartmentAgent", () => {
 
         expect(activeTagIds).toHaveLength(4);
         expect(pendingDropIds).toEqual(activeTagIds);
-    });
-
-    it("rejects incremental full-state output that makes no forward progress", async () => {
-        useTempDataHome("compartment-runner-full-state-no-progress-");
-        createOpenCodeDb("ses-full-state-no-progress", [
-            { id: "m-1", role: "user", text: "zero" },
-            { id: "m-2", role: "assistant", text: "one" },
-            { id: "m-3", role: "user", text: "two" },
-            { id: "m-4", role: "assistant", text: "three" },
-            { id: "m-5", role: "user", text: "protected 1" },
-            { id: "m-6", role: "user", text: "protected 2" },
-            { id: "m-7", role: "user", text: "protected 3" },
-            { id: "m-8", role: "user", text: "protected 4" },
-            { id: "m-9", role: "user", text: "protected 5" },
-        ]);
-        const db = openDatabase();
-        replaceAllCompartments(db, "ses-full-state-no-progress", [
-            {
-                sequence: 0,
-                startMessage: 1,
-                endMessage: 2,
-                startMessageId: "m-1",
-                endMessageId: "m-2",
-                title: "Earlier work",
-                content: "Old summary",
-            },
-        ]);
-
-        const promptSession = mock(async (_input: { body?: { noReply?: boolean } }) => ({}));
-        const client = {
-            session: {
-                get: mock(async () => ({ data: { directory: "/tmp/parent-no-progress" } })),
-                create: mock(async () => ({ data: { id: "ses-agent-no-progress" } })),
-                prompt: promptSession,
-                messages: mock(async () => ({
-                    data: [
-                        {
-                            info: { role: "assistant", time: { created: 1 } },
-                            parts: [
-                                {
-                                    type: "text",
-                                    text: `<compartment start="1" end="2" title="Earlier work">Rewritten summary</compartment>\n<unprocessed_from>3</unprocessed_from>`,
-                                },
-                            ],
-                        },
-                    ],
-                })),
-                delete: mock(async () => ({})),
-            },
-        } as unknown as PluginContext["client"];
-
-        await runCompartmentAgent({
-            client,
-            db,
-            sessionId: "ses-full-state-no-progress",
-            tokenBudget: 10_000,
-            directory: "/tmp",
-        });
-
-        expect(getCompartments(db, "ses-full-state-no-progress")).toEqual([
-            expect.objectContaining({ startMessage: 1, endMessage: 2, content: "Old summary" }),
-        ]);
-        expect(getIgnoredNotificationTexts(promptSession)[0]).toContain("made no forward progress");
-    });
-
-    it("accepts incremental full-state output that repartitions already covered history", async () => {
-        useTempDataHome("compartment-runner-full-state-repartition-");
-        createOpenCodeDb("ses-full-state-repartition", [
-            { id: "m-1", role: "user", text: "zero" },
-            { id: "m-2", role: "assistant", text: "one" },
-            { id: "m-3", role: "user", text: "two" },
-            { id: "m-4", role: "assistant", text: "three" },
-            { id: "m-5", role: "user", text: "protected 1" },
-            { id: "m-6", role: "user", text: "protected 2" },
-            { id: "m-7", role: "user", text: "protected 3" },
-            { id: "m-8", role: "user", text: "protected 4" },
-            { id: "m-9", role: "user", text: "protected 5" },
-        ]);
-        const db = openDatabase();
-        replaceAllCompartments(db, "ses-full-state-repartition", [
-            {
-                sequence: 0,
-                startMessage: 1,
-                endMessage: 2,
-                startMessageId: "m-1",
-                endMessageId: "m-2",
-                title: "Earlier work",
-                content: "Old summary",
-            },
-        ]);
-
-        const promptSession = mock(async (_input: { body?: { noReply?: boolean } }) => ({}));
-        const client = {
-            session: {
-                get: mock(async () => ({ data: { directory: "/tmp/parent-repartition" } })),
-                create: mock(async () => ({ data: { id: "ses-agent-repartition" } })),
-                prompt: promptSession,
-                messages: mock(async () => ({
-                    data: [
-                        {
-                            info: { role: "assistant", time: { created: 1 } },
-                            parts: [
-                                {
-                                    type: "text",
-                                    text: `<compartment start="1" end="4" title="Merged history">Merged summary</compartment>`,
-                                },
-                            ],
-                        },
-                    ],
-                })),
-                delete: mock(async () => ({})),
-            },
-        } as unknown as PluginContext["client"];
-
-        await runCompartmentAgent({
-            client,
-            db,
-            sessionId: "ses-full-state-repartition",
-            tokenBudget: 10_000,
-            directory: "/tmp",
-        });
-
-        expect(getCompartments(db, "ses-full-state-repartition")).toEqual([
-            expect.objectContaining({
-                startMessage: 1,
-                endMessage: 4,
-                title: "Merged history",
-                content: "Merged summary",
-            }),
-        ]);
-        expect(getIgnoredNotificationTexts(promptSession)).toHaveLength(0);
-    });
-
-    it("rejects incremental full-state output with stale unprocessed_from after repartition", async () => {
-        useTempDataHome("compartment-runner-full-state-bad-unprocessed-");
-        createOpenCodeDb("ses-full-state-bad-unprocessed", [
-            { id: "m-1", role: "user", text: "zero" },
-            { id: "m-2", role: "assistant", text: "one" },
-            { id: "m-3", role: "user", text: "two" },
-            { id: "m-4", role: "assistant", text: "three" },
-            { id: "m-5", role: "user", text: "protected 1" },
-            { id: "m-6", role: "user", text: "protected 2" },
-            { id: "m-7", role: "user", text: "protected 3" },
-            { id: "m-8", role: "user", text: "protected 4" },
-            { id: "m-9", role: "user", text: "protected 5" },
-        ]);
-        const db = openDatabase();
-        replaceAllCompartments(db, "ses-full-state-bad-unprocessed", [
-            {
-                sequence: 0,
-                startMessage: 1,
-                endMessage: 2,
-                startMessageId: "m-1",
-                endMessageId: "m-2",
-                title: "Earlier work",
-                content: "Old summary",
-            },
-        ]);
-
-        const promptSession = mock(async (_input: { body?: { noReply?: boolean } }) => ({}));
-        const client = {
-            session: {
-                get: mock(async () => ({ data: { directory: "/tmp/parent-bad-unprocessed" } })),
-                create: mock(async () => ({ data: { id: "ses-agent-bad-unprocessed" } })),
-                prompt: promptSession,
-                messages: mock(async () => ({
-                    data: [
-                        {
-                            info: { role: "assistant", time: { created: 1 } },
-                            parts: [
-                                {
-                                    type: "text",
-                                    text: `<compartment start="1" end="4" title="Merged history">Merged summary</compartment>\n<unprocessed_from>4</unprocessed_from>`,
-                                },
-                            ],
-                        },
-                    ],
-                })),
-                delete: mock(async () => ({})),
-            },
-        } as unknown as PluginContext["client"];
-
-        await runCompartmentAgent({
-            client,
-            db,
-            sessionId: "ses-full-state-bad-unprocessed",
-            tokenBudget: 10_000,
-            directory: "/tmp",
-        });
-
-        expect(getCompartments(db, "ses-full-state-bad-unprocessed")).toEqual([
-            expect.objectContaining({ startMessage: 1, endMessage: 2, content: "Old summary" }),
-        ]);
-        expect(getIgnoredNotificationTexts(promptSession)[0]).toContain(
-            "<unprocessed_from> 4 does not match next uncovered message 5",
-        );
     });
 
     it("returns early without calling historian when only protected tail history remains", async () => {

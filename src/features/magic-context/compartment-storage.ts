@@ -152,6 +152,64 @@ export function replaceAllCompartments(
     })();
 }
 
+/**
+ * Append new compartments without deleting existing ones.
+ * Used by the incremental runner where existing compartments are preserved
+ * and only new compartments for the latest chunk are added.
+ */
+export function appendCompartments(
+    db: Database,
+    sessionId: string,
+    compartments: CompartmentInput[],
+): void {
+    if (compartments.length === 0) return;
+    const now = Date.now();
+    db.transaction(() => {
+        const stmt = db.prepare(
+            "INSERT INTO compartments (session_id, sequence, start_message, end_message, start_message_id, end_message_id, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        );
+        for (const c of compartments) {
+            stmt.run(
+                sessionId,
+                c.sequence,
+                c.startMessage,
+                c.endMessage,
+                c.startMessageId,
+                c.endMessageId,
+                c.title,
+                c.content,
+                now,
+            );
+        }
+    })();
+}
+
+/**
+ * Replace session facts without touching compartments.
+ * Facts are fully re-normalized by the historian on each pass,
+ * so they always need a full replacement.
+ */
+export function replaceSessionFacts(
+    db: Database,
+    sessionId: string,
+    facts: Array<{ category: string; content: string }>,
+): void {
+    const now = Date.now();
+    db.transaction(() => {
+        db.prepare("DELETE FROM session_facts WHERE session_id = ?").run(sessionId);
+        const stmt = db.prepare(
+            "INSERT INTO session_facts (session_id, category, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        );
+        for (const f of facts) {
+            stmt.run(sessionId, f.category, f.content, now, now);
+        }
+        // Clear cached memory block so next injection renders fresh
+        db.prepare(
+            "UPDATE session_meta SET memory_block_cache = '', memory_block_count = 0 WHERE session_id = ?",
+        ).run(sessionId);
+    })();
+}
+
 export function getSessionFacts(db: Database, sessionId: string): SessionFact[] {
     const rows = db
         .prepare("SELECT * FROM session_facts WHERE session_id = ? ORDER BY category ASC, id ASC")
