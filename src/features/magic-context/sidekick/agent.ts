@@ -1,131 +1,21 @@
-import type { Database } from "bun:sqlite";
+import { SIDEKICK_AGENT } from "../../../agents/sidekick";
+import type { SidekickConfig } from "../../../config/schema/magic-context";
+import type { PluginContext } from "../../../plugin/types";
+import * as shared from "../../../shared";
 import { log, sessionLog } from "../../../shared/logger";
-import { escapeXmlContent } from "../compartment-storage";
-import { cosineSimilarity } from "../memory/cosine-similarity";
-import { embed } from "../memory/embedding";
-import { loadAllEmbeddings } from "../memory/storage-memory-embeddings";
-import { searchMemoriesFTS } from "../memory/storage-memory-fts";
-import { getMemoryById, updateMemoryRetrievalCount } from "../memory/storage-memory";
-import type { Memory } from "../memory/types";
-import { chatCompletions } from "./client";
-import type { OpenAIChatMessage, OpenAIChatTool, SidekickConfig } from "./types";
+import { extractLatestAssistantText } from "../../../tools/look-at/assistant-message-extractor";
 
-const DEFAULT_SYSTEM_PROMPT = `You are a context retrieval agent. Given a user's prompt to an AI coding assistant, search project memories and return ONLY relevant results.
+export const SIDEKICK_SYSTEM_PROMPT = `You are Sidekick, a focused memory-retrieval subagent for an AI coding assistant.
+
+Your job is to search project memories and return a concise augmentation for the user's prompt.
 
 Rules:
-- Use search_memory 1-3 times with targeted queries.
-- If no memories are found, respond with exactly: "No relevant memories found."
-- Do NOT explain why no results were found. Do NOT speculate. Do NOT give advice.
-- Do NOT wrap your response in markdown, headers, or commentary.
-- Only report what the memories actually say — never fabricate or paraphrase.
-
-When memories ARE found, respond with:
-- Bullet list of relevant memories grouped by topic (quote them directly)
-
-Keep it under 150 words. No preamble, no sign-off.`;
-
-const SEARCH_TOOL: OpenAIChatTool = {
-    type: "function",
-    function: {
-        name: "search_memory",
-        description: "Search project memories with keyword and semantic retrieval.",
-        parameters: {
-            type: "object",
-            properties: {
-                query: {
-                    type: "string",
-                    description: "Targeted search query for relevant project memories.",
-                },
-            },
-            required: ["query"],
-            additionalProperties: false,
-        },
-    },
-};
-
-interface SearchMemoryArgs {
-    query: string;
-}
-
-function formatMemories(memories: Memory[]): string {
-    if (memories.length === 0) {
-        return "No matching memories found.";
-    }
-
-    return memories
-        .map(
-            (memory, index) =>
-                `${index + 1}. [${memory.category}] ${escapeXmlContent(memory.content)} (project: ${memory.projectPath})`,
-        )
-        .join("\n");
-}
-
-function dedupeMemories(memories: Memory[]): Memory[] {
-    const seen = new Set<number>();
-    const deduped: Memory[] = [];
-
-    for (const memory of memories) {
-        if (seen.has(memory.id)) {
-            continue;
-        }
-
-        seen.add(memory.id);
-        deduped.push(memory);
-    }
-
-    return deduped;
-}
-
-async function searchMemoryTool(
-    db: Database,
-    projectPath: string,
-    rawArgs: string,
-): Promise<string> {
-    let parsedArgs: SearchMemoryArgs;
-
-    try {
-        parsedArgs = JSON.parse(rawArgs) as SearchMemoryArgs;
-    } catch {
-        return "Invalid tool arguments.";
-    }
-
-    const query = parsedArgs.query?.trim();
-    if (!query) {
-        return "Missing query.";
-    }
-
-    const ftsResults = searchMemoriesFTS(db, projectPath, query, 8);
-    const semanticResults: Array<{ memory: Memory; score: number }> = [];
-    const embeddings = loadAllEmbeddings(db, projectPath);
-    const queryEmbedding = embeddings.size > 0 ? await embed(query) : null;
-
-    if (queryEmbedding) {
-        for (const [memoryId, embedding] of embeddings) {
-            const memory = getMemoryById(db, memoryId);
-            if (!memory || memory.status === "archived") {
-                continue;
-            }
-
-            const score = cosineSimilarity(queryEmbedding, embedding);
-            if (score > 0) {
-                semanticResults.push({ memory, score });
-            }
-        }
-
-        semanticResults.sort((left, right) => right.score - left.score);
-    }
-
-    const combined = dedupeMemories([
-        ...ftsResults,
-        ...semanticResults.slice(0, 8).map((entry) => entry.memory),
-    ]).slice(0, 8);
-
-    for (const memory of combined) {
-        updateMemoryRetrievalCount(db, memory.id);
-    }
-
-    return formatMemories(combined);
-}
+- Use ctx_memory(action="search", query="...") to look up relevant memories before answering.
+- Run targeted searches only; prefer 1-3 precise queries.
+- Return only memories that materially help with the user's prompt.
+- If nothing useful is found, respond with exactly: No relevant memories found.
+- Keep the response focused and concise.
+- Do not invent facts or speculate beyond what memories support.`;
 
 /**
  * Strip <think>...</think> blocks emitted by reasoning models (DeepSeek, Qwen, etc.).
@@ -135,97 +25,65 @@ function stripThinkingBlocks(text: string): string {
     return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 
-function getToolCallSummary(message: OpenAIChatMessage): string[] {
-    return (message.tool_calls ?? []).map((toolCall) => toolCall.function.name);
-}
-
 export async function runSidekick(deps: {
-    db: Database;
+    client: PluginContext["client"];
     sessionId?: string;
     projectPath: string;
     userMessage: string;
     config: SidekickConfig;
+    sessionDirectory?: string;
 }): Promise<string | null> {
+    let agentSessionId: string | null = null;
+
     try {
-        const messages: OpenAIChatMessage[] = [
-            {
-                role: "system",
-                content: deps.config.system_prompt ?? DEFAULT_SYSTEM_PROMPT,
+        const createResponse = await deps.client.session.create({
+            body: {
+                ...(deps.sessionId ? { parentID: deps.sessionId } : {}),
+                title: "magic-context-sidekick",
             },
-            {
-                role: "user",
-                content: deps.userMessage,
-            },
-        ];
-
-        const maxToolCalls = Math.max(0, deps.config.max_tool_calls);
-        const maxIterations = maxToolCalls + 2;
-        let toolIterations = 0;
-
-        for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
-            const tools = toolIterations < maxToolCalls ? [SEARCH_TOOL] : undefined;
-            const response = await chatCompletions({
-                endpoint: deps.config.endpoint,
-                apiKey: deps.config.api_key,
-                model: deps.config.model,
-                messages,
-                tools,
-                timeoutMs: deps.config.timeout_ms,
-                temperature: 0,
-                sessionId: deps.sessionId,
-            });
-
-            const choice = response.choices[0];
-            if (!choice) {
-                return null;
-            }
-
-            const assistantMessage = choice.message;
-            if (deps.sessionId) {
-                sessionLog(
-                    deps.sessionId,
-                    `sidekick: iteration ${iteration}, tool_calls: ${JSON.stringify(getToolCallSummary(assistantMessage))}`,
-                );
-            } else {
-                log(
-                    `[magic-context] sidekick: iteration ${iteration}, tool_calls: ${JSON.stringify(getToolCallSummary(assistantMessage))}`,
-                );
-            }
-
-            messages.push(assistantMessage);
-
-            const toolCalls = assistantMessage.tool_calls ?? [];
-            if (toolCalls.length === 0) {
-                const finalText = stripThinkingBlocks(assistantMessage.content?.trim() ?? "");
-                return finalText.length > 0 ? finalText : null;
-            }
-
-            if (toolIterations >= maxToolCalls) {
-                return null;
-            }
-
-            toolIterations += 1;
-
-            for (const toolCall of toolCalls) {
-                let result = "Unsupported tool.";
-
-                if (toolCall.function.name === "search_memory") {
-                    result = await searchMemoryTool(
-                        deps.db,
-                        deps.projectPath,
-                        toolCall.function.arguments,
-                    );
-                }
-
-                messages.push({
-                    role: "tool",
-                    tool_call_id: toolCall.id,
-                    content: result,
-                });
-            }
+            query: { directory: deps.sessionDirectory ?? deps.projectPath },
+        });
+        const createdSession = shared.normalizeSDKResponse(
+            createResponse,
+            null as { id?: string } | null,
+            { preferResponseOnMissingData: true },
+        );
+        agentSessionId = typeof createdSession?.id === "string" ? createdSession.id : null;
+        if (!agentSessionId) {
+            throw new Error("Sidekick could not create its child session.");
         }
 
-        return null;
+        await shared.promptSyncWithModelSuggestionRetry(
+            deps.client,
+            {
+                path: { id: agentSessionId },
+                query: { directory: deps.sessionDirectory ?? deps.projectPath },
+                body: {
+                    agent: SIDEKICK_AGENT,
+                    system:
+                        deps.config.system_prompt?.trim() ||
+                        deps.config.prompt?.trim() ||
+                        SIDEKICK_SYSTEM_PROMPT,
+                    parts: [{ type: "text", text: deps.userMessage }],
+                },
+            },
+            { timeoutMs: deps.config.timeout_ms },
+        );
+
+        const messagesResponse = await deps.client.session.messages({
+            path: { id: agentSessionId },
+            query: { directory: deps.sessionDirectory ?? deps.projectPath },
+        });
+        const messages = shared.normalizeSDKResponse(messagesResponse, [] as unknown[], {
+            preferResponseOnMissingData: true,
+        });
+        const taskResult = extractLatestAssistantText(messages);
+        if (!taskResult) {
+            return null;
+        }
+
+        const finalText = stripThinkingBlocks(taskResult);
+        return finalText.length > 0 ? finalText : null;
     } catch (error) {
         if (deps.sessionId) {
             sessionLog(deps.sessionId, "sidekick failed:", error);
@@ -233,5 +91,16 @@ export async function runSidekick(deps: {
             log("[magic-context] sidekick failed:", error);
         }
         return null;
+    } finally {
+        if (agentSessionId) {
+            await deps.client.session
+                .delete({
+                    path: { id: agentSessionId },
+                    query: { directory: deps.sessionDirectory ?? deps.projectPath },
+                })
+                .catch((error: unknown) => {
+                    log("[magic-context] failed to delete sidekick child session:", error);
+                });
+        }
     }
 }

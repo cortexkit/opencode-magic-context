@@ -100,7 +100,6 @@ export function createEventHook(args: {
     emergencyNudgeFired: EmergencyNudgeFired;
     flushedSessions: FlushedSessions;
     lastHeuristicsTurnId: LastHeuristicsTurnId;
-    pendingSidekickResults?: Map<string, string>;
     commitSeenLastPass?: Map<string, boolean>;
     client: PluginContext["client"];
     protectedTags: number;
@@ -130,7 +129,6 @@ export function createEventHook(args: {
             args.emergencyNudgeFired.delete(sessionId);
             args.flushedSessions.delete(sessionId);
             args.lastHeuristicsTurnId.delete(sessionId);
-            args.pendingSidekickResults?.delete(sessionId);
             args.commitSeenLastPass?.delete(sessionId);
             clearNoteNudgeState(sessionId);
         }

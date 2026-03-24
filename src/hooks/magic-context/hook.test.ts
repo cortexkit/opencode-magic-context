@@ -384,6 +384,89 @@ describe("magic-context hook", () => {
         );
     });
 
+    it("runs sidekick for ctx-aug and sends the augmented user prompt", async () => {
+        process.env.XDG_DATA_HOME = makeTempDir("hook-sidekick-aug-");
+        const promptMocks = createPromptMocks();
+        promptMocks.listMessages = mock(async () => ({
+            data: [
+                {
+                    info: { role: "assistant", time: { created: Date.now() } },
+                    parts: [{ type: "text", text: "Relevant memory briefing" }],
+                },
+            ],
+        }));
+        const deps = createMockDeps(promptMocks);
+        deps.config = {
+            ...deps.config,
+            sidekick: {
+                enabled: true,
+                timeout_ms: 5_000,
+            },
+        };
+        const hook = requireHook(createMagicContextHook(deps));
+
+        await expectSentinel(
+            hook["command.execute.before"]!(
+                {
+                    command: "ctx-aug",
+                    sessionID: "ses-sidekick",
+                    arguments: "Implement sidekick migration",
+                },
+                { parts: [{ type: "text", text: "" }] },
+            ),
+            "__CONTEXT_MANAGEMENT_CTX-AUG_HANDLED__",
+        );
+
+        expect(promptMocks.createSession).toHaveBeenCalledTimes(1);
+        expect(promptMocks.prompt).toBeDefined();
+        expect(promptMocks.prompt!).toHaveBeenCalledTimes(2);
+        expect(promptMocks.prompt!.mock.calls[0]?.[0]).toEqual(
+            expect.objectContaining({
+                path: { id: "ses-sidekick" },
+                body: expect.objectContaining({
+                    parts: [
+                        expect.objectContaining({
+                            text: "🔍 Preparing augmentation… this may take 2-10s depending on your sidekick provider.",
+                        }),
+                    ],
+                }),
+            }),
+        );
+        expect(promptMocks.prompt!.mock.calls[1]?.[0]).toEqual(
+            expect.objectContaining({
+                path: { id: "dream-child" },
+                query: { directory: "/tmp" },
+                body: expect.objectContaining({
+                    agent: "sidekick",
+                    system: expect.stringContaining('ctx_memory(action="search"'),
+                    parts: [
+                        {
+                            type: "text",
+                            text: "Implement sidekick migration",
+                        },
+                    ],
+                }),
+            }),
+        );
+        expect(promptMocks.promptAsync).toHaveBeenCalledWith(
+            expect.objectContaining({
+                path: { id: "ses-sidekick" },
+                body: {
+                    parts: [
+                        {
+                            type: "text",
+                            text: "Implement sidekick migration\n\n<sidekick-augmentation>\nRelevant memory briefing\n</sidekick-augmentation>",
+                        },
+                    ],
+                },
+            }),
+        );
+        expect(promptMocks.deleteSession).toHaveBeenCalledWith({
+            path: { id: "dream-child" },
+            query: { directory: "/tmp" },
+        });
+    });
+
     it("checks the dream schedule in the background after message updates", async () => {
         process.env.XDG_DATA_HOME = makeTempDir("hook-dream-schedule-");
         const promptMocks = createPromptMocks();

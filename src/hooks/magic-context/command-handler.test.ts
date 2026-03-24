@@ -476,6 +476,97 @@ describe("createMagicContextCommandHandler", () => {
         });
     });
 
+    describe("ctx-aug", () => {
+        it("runs sidekick in a child session and sends the augmented prompt", async () => {
+            const sendNotification = mock(async () => {});
+            const client = {
+                session: {
+                    create: mock(async () => ({ data: { id: "sidekick-child" } })),
+                    prompt: mock(async () => undefined),
+                    promptAsync: mock(async () => undefined),
+                    messages: mock(async () => ({
+                        data: [
+                            {
+                                info: { role: "assistant", time: { created: Date.now() } },
+                                parts: [{ type: "text", text: "Use Bun for commands" }],
+                            },
+                        ],
+                    })),
+                    delete: mock(async () => ({ data: undefined })),
+                },
+            };
+            const handler = createMagicContextCommandHandler({
+                db,
+                protectedTags: 3,
+                sendNotification,
+                sidekick: {
+                    config: {
+                        enabled: true,
+                        timeout_ms: 5_000,
+                    },
+                    projectPath: "/repo/project",
+                    sessionDirectory: "/repo/project",
+                    client: client as never,
+                },
+            });
+
+            await expectSentinel(
+                handler["command.execute.before"](
+                    {
+                        command: "ctx-aug",
+                        sessionID: "ses-aug",
+                        arguments: "Implement sidekick migration",
+                    },
+                    makeOutput(""),
+                    {},
+                ),
+                "__CONTEXT_MANAGEMENT_CTX-AUG_HANDLED__",
+            );
+
+            expect(sendNotification).toHaveBeenCalledWith(
+                "ses-aug",
+                "🔍 Preparing augmentation… this may take 2-10s depending on your sidekick provider.",
+                {},
+            );
+            expect(client.session.create).toHaveBeenCalledTimes(1);
+            expect(client.session.promptAsync).toHaveBeenCalledWith({
+                path: { id: "ses-aug" },
+                body: {
+                    parts: [
+                        {
+                            type: "text",
+                            text: "Implement sidekick migration\n\n<sidekick-augmentation>\nUse Bun for commands\n</sidekick-augmentation>",
+                        },
+                    ],
+                },
+            });
+        });
+
+        it("reports when sidekick is not configured", async () => {
+            const sendNotification = mock(async () => {});
+            const handler = createMagicContextCommandHandler({
+                db,
+                protectedTags: 3,
+                sendNotification,
+            });
+
+            await expectSentinel(
+                handler["command.execute.before"](
+                    { command: "ctx-aug", sessionID: "ses-aug-missing", arguments: "Help" },
+                    makeOutput(""),
+                    {},
+                ),
+                "__CONTEXT_MANAGEMENT_CTX-AUG_HANDLED__",
+            );
+
+            expect(sendNotification).toHaveBeenCalledWith(
+                "ses-aug-missing",
+                expect.stringContaining("Sidekick is not configured"),
+                {},
+            );
+        });
+    });
+
     it("handles flush and status as independent commands", async () => {
         insertTag(db, "ses-both", 1, 200);
         insertPendingOp(db, "ses-both", 1);

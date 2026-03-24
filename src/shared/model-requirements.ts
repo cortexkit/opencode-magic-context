@@ -1,5 +1,6 @@
 import { DREAMER_AGENT } from "../agents/dreamer";
 import { HISTORIAN_AGENT } from "../agents/historian";
+import { SIDEKICK_AGENT } from "../agents/sidekick";
 
 export interface AgentModelRequirement {
     fallback_models: string[];
@@ -12,6 +13,9 @@ export const AGENT_MODEL_REQUIREMENTS: Record<string, AgentModelRequirement> = {
         fallback_models: [...DEFAULT_UTILITY_FALLBACKS],
     },
     [DREAMER_AGENT]: {
+        fallback_models: [...DEFAULT_UTILITY_FALLBACKS],
+    },
+    [SIDEKICK_AGENT]: {
         fallback_models: [...DEFAULT_UTILITY_FALLBACKS],
     },
 };

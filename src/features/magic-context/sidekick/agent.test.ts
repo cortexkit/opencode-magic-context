@@ -1,289 +1,168 @@
 /// <reference types="bun-types" />
 
-import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { insertMemory } from "../memory/storage-memory";
+import { afterAll, afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import type { SidekickConfig } from "../../../config/schema/magic-context";
+import type { PluginContext } from "../../../plugin/types";
+import * as shared from "../../../shared";
 import { runSidekick } from "./agent";
-import type { OpenAIChatCompletionResponse } from "./types";
 
-let db: Database;
-let server: ReturnType<typeof Bun.serve> | null = null;
+const baseConfig: SidekickConfig = {
+    enabled: true,
+    timeout_ms: 5_000,
+};
 
-function makeMemoryDatabase(): Database {
-    const database = Database.open(":memory:");
-    database.run(`
-    CREATE TABLE IF NOT EXISTS memories (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_path TEXT NOT NULL,
-      category TEXT NOT NULL,
-      content TEXT NOT NULL,
-      normalized_hash TEXT NOT NULL,
-      source_session_id TEXT,
-      source_type TEXT DEFAULT 'historian',
-      seen_count INTEGER DEFAULT 1,
-      retrieval_count INTEGER DEFAULT 0,
-      first_seen_at INTEGER NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      last_seen_at INTEGER NOT NULL,
-      last_retrieved_at INTEGER,
-      status TEXT DEFAULT 'active',
-      expires_at INTEGER,
-      verification_status TEXT DEFAULT 'unverified',
-      verified_at INTEGER,
-      superseded_by_memory_id INTEGER,
-      merged_from TEXT,
-      metadata_json TEXT,
-      UNIQUE(project_path, category, normalized_hash)
-    );
-
-    CREATE TABLE IF NOT EXISTS memory_embeddings (
-      memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
-      embedding BLOB NOT NULL,
-      model_id TEXT
-    );
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-      content,
-      category,
-      content='memories',
-      content_rowid='id',
-      tokenize='porter unicode61'
-    );
-
-    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-      INSERT INTO memories_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-      INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES ('delete', old.id, old.content, old.category);
-      INSERT INTO memories_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
-    END;
-  `);
-    return database;
+function createSidekickClient(
+    args: { createSessionId?: string | null; messages?: unknown[] } = {},
+): PluginContext["client"] {
+    return {
+        session: {
+            create: mock(async () =>
+                args.createSessionId === null
+                    ? { data: {} }
+                    : { data: { id: args.createSessionId ?? "sidekick-child" } },
+            ),
+            prompt: mock(async () => undefined),
+            messages: mock(async () => ({
+                data: args.messages ?? [
+                    {
+                        info: { role: "assistant", time: { created: Date.now() } },
+                        parts: [{ type: "text", text: "Relevant memory briefing" }],
+                    },
+                ],
+            })),
+            delete: mock(async () => ({ data: undefined })),
+        },
+    } as unknown as PluginContext["client"];
 }
-
-function startMockServer(handler: (request: Request) => Response | Promise<Response>): {
-    endpoint: string;
-} {
-    server = Bun.serve({
-        port: 0,
-        fetch: handler,
-    });
-
-    return { endpoint: `http://127.0.0.1:${server.port}/v1` };
-}
-
-function jsonResponse(body: OpenAIChatCompletionResponse): Response {
-    return Response.json(body);
-}
-
-function insertTestMemory(content: string): void {
-    insertMemory(db, {
-        projectPath: "/repo/project",
-        category: "CONSTRAINTS",
-        content,
-    });
-}
-
-beforeEach(() => {
-    db = makeMemoryDatabase();
-});
 
 afterEach(() => {
-    server?.stop(true);
-    server = null;
-    db.close(false);
+    mock.restore();
+});
+
+afterAll(() => {
+    mock.restore();
 });
 
 describe("runSidekick", () => {
-    it("returns context briefing after tool-calling flow", async () => {
-        insertTestMemory("Use Bun for all package and test commands");
-        let requestCount = 0;
-        const { endpoint } = startMockServer(async (request) => {
-            const body = (await request.json()) as {
-                messages: Array<{ role: string }>;
-                tools?: unknown[];
-            };
-            requestCount += 1;
-
-            if (requestCount === 1) {
-                expect(body.tools).toBeArray();
-                return jsonResponse({
-                    choices: [
-                        {
-                            finish_reason: "tool_calls",
-                            message: {
-                                role: "assistant",
-                                content: null,
-                                tool_calls: [
-                                    {
-                                        id: "call-1",
-                                        type: "function",
-                                        function: {
-                                            name: "search_memory",
-                                            arguments: JSON.stringify({
-                                                query: "bun test commands",
-                                            }),
-                                        },
-                                    },
-                                ],
-                            },
-                        },
-                    ],
-                });
-            }
-
-            expect(body.messages.at(-1)?.role).toBe("tool");
-            return jsonResponse({
-                choices: [
-                    {
-                        finish_reason: "stop",
-                        message: {
-                            role: "assistant",
-                            content:
-                                'The user likely wants to implement sidekick support.\n- Workflow: "Use Bun for all package and test commands"',
-                        },
-                    },
-                ],
-            });
-        });
+    it("creates a child session, prompts the sidekick agent, and deletes the child session", async () => {
+        const client = createSidekickClient();
+        const promptSyncSpy = spyOn(shared, "promptSyncWithModelSuggestionRetry").mockResolvedValue(
+            undefined,
+        );
 
         const result = await runSidekick({
-            db,
+            client,
+            sessionId: "ses-parent",
             projectPath: "/repo/project",
+            sessionDirectory: "/repo/project",
             userMessage: "Implement sidekick and keep Bun workflow rules.",
-            config: {
-                enabled: true,
-                endpoint,
-                model: "test-model",
-                api_key: "",
-                max_tool_calls: 3,
-                timeout_ms: 5_000,
-            },
+            config: baseConfig,
         });
 
-        expect(result).toContain("Use Bun for all package and test commands");
+        expect(result).toBe("Relevant memory briefing");
+        expect(client.session.create).toHaveBeenCalledWith({
+            body: { parentID: "ses-parent", title: "magic-context-sidekick" },
+            query: { directory: "/repo/project" },
+        });
+        expect(promptSyncSpy).toHaveBeenCalledWith(
+            client,
+            {
+                path: { id: "sidekick-child" },
+                query: { directory: "/repo/project" },
+                body: {
+                    agent: "sidekick",
+                    system: expect.stringContaining('ctx_memory(action="search"'),
+                    parts: [
+                        { type: "text", text: "Implement sidekick and keep Bun workflow rules." },
+                    ],
+                },
+            },
+            { timeoutMs: 5_000 },
+        );
+        expect(client.session.messages).toHaveBeenCalledWith({
+            path: { id: "sidekick-child" },
+            query: { directory: "/repo/project" },
+        });
+        expect(client.session.delete).toHaveBeenCalledWith({
+            path: { id: "sidekick-child" },
+            query: { directory: "/repo/project" },
+        });
     });
 
-    it("returns null when endpoint is unreachable", async () => {
+    it("strips thinking blocks from the final output", async () => {
+        const client = createSidekickClient({
+            messages: [
+                {
+                    info: { role: "assistant", time: { created: Date.now() } },
+                    parts: [{ type: "text", text: "<think>hidden</think>Focused result" }],
+                },
+            ],
+        });
+        spyOn(shared, "promptSyncWithModelSuggestionRetry").mockResolvedValue(undefined);
+
         const result = await runSidekick({
-            db,
+            client,
             projectPath: "/repo/project",
             userMessage: "Implement sidekick.",
-            config: {
-                enabled: true,
-                endpoint: "http://127.0.0.1:9/v1",
-                model: "test-model",
-                api_key: "",
-                max_tool_calls: 3,
-                timeout_ms: 100,
-            },
+            config: baseConfig,
+        });
+
+        expect(result).toBe("Focused result");
+    });
+
+    it("returns null when the child session cannot be created", async () => {
+        const client = createSidekickClient({ createSessionId: null });
+
+        const result = await runSidekick({
+            client,
+            projectPath: "/repo/project",
+            userMessage: "Implement sidekick.",
+            config: baseConfig,
         });
 
         expect(result).toBeNull();
+        expect(client.session.delete).not.toHaveBeenCalled();
     });
 
-    it("returns null on timeout", async () => {
-        const { endpoint } = startMockServer(
-            () =>
-                new Promise<Response>((resolve) =>
-                    setTimeout(() => resolve(jsonResponse({ choices: [] })), 200),
-                ),
+    it("returns null when prompting fails and still deletes the child session", async () => {
+        const client = createSidekickClient();
+        spyOn(shared, "promptSyncWithModelSuggestionRetry").mockRejectedValue(
+            new Error("prompt timed out after 5000ms"),
         );
 
         const result = await runSidekick({
-            db,
+            client,
             projectPath: "/repo/project",
             userMessage: "Implement sidekick.",
-            config: {
-                enabled: true,
-                endpoint,
-                model: "test-model",
-                api_key: "",
-                max_tool_calls: 3,
-                timeout_ms: 25,
-            },
+            config: baseConfig,
         });
 
         expect(result).toBeNull();
+        expect(client.session.delete).toHaveBeenCalledTimes(1);
     });
 
-    it("returns null when max iterations are exceeded", async () => {
-        const { endpoint } = startMockServer(() =>
-            jsonResponse({
-                choices: [
-                    {
-                        finish_reason: "tool_calls",
-                        message: {
-                            role: "assistant",
-                            content: null,
-                            tool_calls: [
-                                {
-                                    id: crypto.randomUUID(),
-                                    type: "function",
-                                    function: {
-                                        name: "search_memory",
-                                        arguments: JSON.stringify({ query: "loop forever" }),
-                                    },
-                                },
-                            ],
-                        },
-                    },
-                ],
+    it("uses config system_prompt when provided", async () => {
+        const client = createSidekickClient();
+        const promptSyncSpy = spyOn(shared, "promptSyncWithModelSuggestionRetry").mockResolvedValue(
+            undefined,
+        );
+
+        await runSidekick({
+            client,
+            projectPath: "/repo/project",
+            userMessage: "Implement sidekick.",
+            config: {
+                ...baseConfig,
+                system_prompt: "Custom sidekick system prompt",
+            },
+        });
+
+        expect(promptSyncSpy.mock.calls[0]?.[1]).toEqual(
+            expect.objectContaining({
+                body: expect.objectContaining({
+                    system: "Custom sidekick system prompt",
+                }),
             }),
         );
-
-        const result = await runSidekick({
-            db,
-            projectPath: "/repo/project",
-            userMessage: "Implement sidekick.",
-            config: {
-                enabled: true,
-                endpoint,
-                model: "test-model",
-                api_key: "",
-                max_tool_calls: 1,
-                timeout_ms: 5_000,
-            },
-        });
-
-        expect(result).toBeNull();
-    });
-
-    it("returns direct text when no tool calls are requested", async () => {
-        const { endpoint } = startMockServer(() =>
-            jsonResponse({
-                choices: [
-                    {
-                        finish_reason: "stop",
-                        message: {
-                            role: "assistant",
-                            content: "The user likely wants to implement sidekick support.",
-                        },
-                    },
-                ],
-            }),
-        );
-
-        const result = await runSidekick({
-            db,
-            projectPath: "/repo/project",
-            userMessage: "Implement sidekick.",
-            config: {
-                enabled: true,
-                endpoint,
-                model: "test-model",
-                api_key: "",
-                max_tool_calls: 3,
-                timeout_ms: 5_000,
-            },
-        });
-
-        expect(result).toBe("The user likely wants to implement sidekick support.");
     });
 });

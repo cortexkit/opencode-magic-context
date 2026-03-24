@@ -3,6 +3,7 @@ import {
     DEFAULT_HISTORIAN_TIMEOUT_MS,
     DEFAULT_NUDGE_INTERVAL_TOKENS,
     type DreamerConfig,
+    type SidekickConfig,
 } from "../../config/schema/magic-context";
 import {
     checkScheduleAndEnqueue,
@@ -69,15 +70,7 @@ export interface MagicContextDeps {
             enabled: boolean;
             injection_budget_tokens: number;
         };
-        sidekick?: {
-            enabled: boolean;
-            endpoint: string;
-            model: string;
-            api_key: string;
-            max_tool_calls: number;
-            timeout_ms: number;
-            system_prompt?: string;
-        };
+        sidekick?: SidekickConfig;
         dreamer?: DreamerConfig;
     };
 }
@@ -144,7 +137,6 @@ export function createMagicContextHook(deps: MagicContextDeps) {
     registerDreamProjectDirectory(projectPath, deps.directory);
 
     const nudgePlacements = createNudgePlacementStore(db);
-    const pendingSidekickResults = new Map<string, string>();
     const flushedSessions = new Set<string>();
     const lastHeuristicsTurnId = new Map<string, string>();
     const commitSeenLastPass = new Map<string, boolean>();
@@ -187,7 +179,6 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         historianTimeoutMs: deps.config.historian_timeout_ms ?? DEFAULT_HISTORIAN_TIMEOUT_MS,
         getNotificationParams: (sessionId) =>
             getLiveNotificationParams(sessionId, liveModelBySession, variantBySession),
-        pendingSidekickResults,
     });
     const eventHandler = createEventHandler({
         contextUsageMap,
@@ -264,8 +255,8 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             ? {
                   config: deps.config.sidekick,
                   projectPath,
+                  sessionDirectory: deps.directory,
                   client: deps.client,
-                  pendingResults: pendingSidekickResults,
               }
             : undefined,
         dreamer: deps.config.dreamer

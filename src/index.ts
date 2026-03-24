@@ -1,9 +1,11 @@
 import type { Plugin } from "@opencode-ai/plugin";
-import { HISTORIAN_AGENT } from "./agents/historian";
-import { loadPluginConfig } from "./config";
 import { DREAMER_AGENT } from "./agents/dreamer";
+import { HISTORIAN_AGENT } from "./agents/historian";
+import { SIDEKICK_AGENT } from "./agents/sidekick";
+import { loadPluginConfig } from "./config";
 import { getMagicContextBuiltinCommands } from "./features/builtin-commands/commands";
 import { DREAMER_SYSTEM_PROMPT } from "./features/magic-context/dreamer/task-prompts";
+import { SIDEKICK_SYSTEM_PROMPT } from "./features/magic-context/sidekick/agent";
 import { COMPARTMENT_AGENT_SYSTEM_PROMPT } from "./hooks/magic-context/compartment-prompt";
 import { createEventHandler } from "./plugin/event";
 import { createSessionHooks } from "./plugin/hooks/create-session-hooks";
@@ -87,6 +89,17 @@ const plugin: Plugin = async (ctx) => {
                       return agentOverrides;
                   })()
                 : undefined;
+            const sidekickAgentOverrides = pluginConfig.sidekick
+                ? (() => {
+                      const {
+                          enabled: _enabled,
+                          timeout_ms: _timeoutMs,
+                          system_prompt: _systemPrompt,
+                          ...agentOverrides
+                      } = pluginConfig.sidekick;
+                      return agentOverrides;
+                  })()
+                : undefined;
 
             config.agent = {
                 ...(config.agent ?? {}),
@@ -99,6 +112,11 @@ const plugin: Plugin = async (ctx) => {
                     HISTORIAN_AGENT,
                     COMPARTMENT_AGENT_SYSTEM_PROMPT,
                     pluginConfig.historian,
+                ),
+                [SIDEKICK_AGENT]: buildHiddenAgentConfig(
+                    SIDEKICK_AGENT,
+                    SIDEKICK_SYSTEM_PROMPT,
+                    sidekickAgentOverrides,
                 ),
             };
         },

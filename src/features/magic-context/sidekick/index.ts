@@ -1,10 +1,3 @@
 export { runSidekick } from "./agent";
-export { chatCompletions } from "./client";
-export type {
-    OpenAIChatCompletionChoice,
-    OpenAIChatCompletionResponse,
-    OpenAIChatMessage,
-    OpenAIChatTool,
-    OpenAIChatToolCall,
-    SidekickConfig,
-} from "./types";
+export { SIDEKICK_SYSTEM_PROMPT } from "./agent";
+export type { SidekickConfig } from "../../../config/schema/magic-context";

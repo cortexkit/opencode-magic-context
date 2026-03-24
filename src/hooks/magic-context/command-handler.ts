@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { DreamerConfig } from "../../config/schema/magic-context";
+import type { SidekickConfig } from "../../config/schema/magic-context";
 import {
     enqueueDream,
     ensureDreamQueueTable,
@@ -8,7 +9,7 @@ import {
 } from "../../features/magic-context/dreamer";
 import { sessionLog } from "../../shared";
 import { runSidekick } from "../../features/magic-context/sidekick/agent";
-import type { SidekickConfig } from "../../features/magic-context/sidekick/types";
+import type { PluginContext } from "../../plugin/types";
 import { executeFlush } from "./execute-flush";
 import { executeStatus } from "./execute-status";
 import type { NotificationParams } from "./send-session-notification";
@@ -41,8 +42,8 @@ async function executeAugmentation(
         sidekick?: {
             config: SidekickConfig;
             projectPath: string;
-            client: unknown;
-            pendingResults: Map<string, string>;
+            sessionDirectory?: string;
+            client: PluginContext["client"];
         };
     },
     sessionId: string,
@@ -77,9 +78,10 @@ async function executeAugmentation(
     // Step 2: Run sidekick
     sessionLog(sessionId, "/ctx-aug: running sidekick");
     const sidekickResult = await runSidekick({
-        db: deps.db,
+        client: deps.sidekick.client,
         sessionId,
         projectPath: deps.sidekick.projectPath,
+        sessionDirectory: deps.sidekick.sessionDirectory,
         userMessage: prompt,
         config: deps.sidekick.config,
     });
@@ -95,10 +97,7 @@ async function executeAugmentation(
         sessionLog(sessionId, "/ctx-aug: sidekick returned no result, sending prompt as-is");
     }
 
-    // Step 4: Store result so transform can suppress <project-memory> if this is the first message
-    deps.sidekick.pendingResults.set(sessionId, augmentedPrompt);
-
-    // Step 5: Send as a real user prompt (will be processed by the model)
+    // Step 4: Send as a real user prompt (will be processed by the model)
     await sendUserPrompt(deps.sidekick.client, sessionId, augmentedPrompt);
 
     throw new Error(`${SENTINEL_PREFIX}CTX-AUG_HANDLED__`);
@@ -197,8 +196,8 @@ export function createMagicContextCommandHandler(deps: {
     sidekick?: {
         config: SidekickConfig;
         projectPath: string;
-        client: unknown;
-        pendingResults: Map<string, string>;
+        sessionDirectory?: string;
+        client: PluginContext["client"];
     };
     dreamer?: {
         config: DreamerConfig;

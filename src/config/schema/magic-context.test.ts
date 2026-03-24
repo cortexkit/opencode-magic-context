@@ -36,17 +36,10 @@ describe("MagicContextConfigSchema", () => {
                     auto_promote: true,
                     retrieval_count_promotion_threshold: 3,
                 },
-                sidekick: {
-                    enabled: false,
-                    endpoint: "http://localhost:1234/v1",
-                    model: "qwen3.5-9b",
-                    api_key: "",
-                    max_tool_calls: 3,
-                    timeout_ms: 30000,
-                },
             });
             expect(result.historian).toBeUndefined();
             expect(result.dreamer).toBeUndefined();
+            expect(result.sidekick).toBeUndefined();
         });
     });
 
@@ -78,10 +71,10 @@ describe("MagicContextConfigSchema", () => {
                 },
                 sidekick: {
                     enabled: true,
-                    endpoint: "http://localhost:9999/v1",
                     model: "qwen-test",
-                    api_key: "secret",
-                    max_tool_calls: 4,
+                    fallback_models: ["qwen-fallback"],
+                    temperature: 0.1,
+                    variant: "fast",
                     timeout_ms: 12_000,
                     system_prompt: "Custom prompt",
                 },
@@ -90,6 +83,20 @@ describe("MagicContextConfigSchema", () => {
             const result = MagicContextConfigSchema.parse(input);
 
             expect(result).toEqual(input);
+        });
+
+        it("applies sidekick defaults when the object is present", () => {
+            const result = MagicContextConfigSchema.parse({
+                sidekick: {
+                    model: "github-copilot/gpt-5.4",
+                },
+            });
+
+            expect(result.sidekick).toEqual({
+                enabled: false,
+                model: "github-copilot/gpt-5.4",
+                timeout_ms: 30000,
+            });
         });
 
         it("parses per-model cache_ttl objects", () => {

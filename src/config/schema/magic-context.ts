@@ -66,6 +66,13 @@ export const DreamerConfigSchema = AgentOverrideConfigSchema.merge(
 );
 export type DreamerConfig = z.infer<typeof DreamerConfigSchema>;
 
+export const SidekickConfigSchema = AgentOverrideConfigSchema.extend({
+    enabled: z.boolean().default(false),
+    timeout_ms: z.number().default(30000),
+    system_prompt: z.string().optional(),
+}).optional();
+export type SidekickConfig = NonNullable<z.infer<typeof SidekickConfigSchema>>;
+
 const BaseEmbeddingConfigSchema = z
     .object({
         provider: z.enum(["local", "openai-compatible", "off"]).default("local"),
@@ -136,15 +143,7 @@ export interface MagicContextConfig {
         auto_promote: boolean;
         retrieval_count_promotion_threshold: number;
     };
-    sidekick: {
-        enabled: boolean;
-        endpoint: string;
-        model: string;
-        api_key: string;
-        max_tool_calls: number;
-        timeout_ms: number;
-        system_prompt?: string;
-    };
+    sidekick?: SidekickConfig;
 }
 
 export const MagicContextConfigSchema = z
@@ -212,24 +211,7 @@ export const MagicContextConfigSchema = z
                 retrieval_count_promotion_threshold: 3,
             }),
         /** Optional sidekick agent configuration for session-start memory retrieval */
-        sidekick: z
-            .object({
-                enabled: z.boolean().default(false),
-                endpoint: z.string().default("http://localhost:1234/v1"),
-                model: z.string().default("qwen3.5-9b"),
-                api_key: z.string().default(""),
-                max_tool_calls: z.number().default(3),
-                timeout_ms: z.number().default(30000),
-                system_prompt: z.string().optional(),
-            })
-            .default({
-                enabled: false,
-                endpoint: "http://localhost:1234/v1",
-                model: "qwen3.5-9b",
-                api_key: "",
-                max_tool_calls: 3,
-                timeout_ms: 30000,
-            }),
+        sidekick: SidekickConfigSchema,
     })
     .transform((data): MagicContextConfig => {
         return {

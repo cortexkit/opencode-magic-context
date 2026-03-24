@@ -173,17 +173,34 @@ Cross-session memory settings. All memories are scoped to the current project (i
 
 ## `sidekick`
 
-Optional prompt augmenter that runs on `/ctx-aug`. Uses an OpenAI-compatible endpoint (local or remote) with tool-calling to search memories and produce a context briefing.
+Optional prompt augmenter that runs on `/ctx-aug`. Sidekick is a hidden OpenCode subagent that creates an ephemeral child session, searches memories with `ctx_memory`, and returns a focused context briefing.
+
+```jsonc
+{
+  "sidekick": {
+    "enabled": true,
+    "model": "github-copilot/gpt-5.4",
+    "fallback_models": ["anthropic/claude-sonnet-4-6"],
+    "timeout_ms": 30000
+  }
+}
+```
+
+### Agent fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | `string` | Primary model. |
+| `fallback_models` | `string` or `string[]` | Fallback models. |
+| `temperature` | `number` (0–2) | Sampling temperature. |
+| `variant` | `string` | Agent variant. |
+| `prompt` | `string` | Agent prompt override. |
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | `boolean` | `false` | Enable sidekick. |
-| `endpoint` | `string` | `"http://localhost:1234/v1"` | OpenAI-compatible endpoint. |
-| `model` | `string` | `"qwen3.5-9b"` | Model for sidekick queries. |
-| `api_key` | `string` | `""` | API key if needed. |
-| `max_tool_calls` | `number` | `3` | Max tool calls per retrieval. |
 | `timeout_ms` | `number` | `30000` | Timeout per run (ms). |
-| `system_prompt` | `string` | — | Custom system prompt override. |
+| `system_prompt` | `string` | — | Per-run system prompt override for the sidekick child session. |
 
 ---
 
@@ -241,9 +258,9 @@ Optional prompt augmenter that runs on `/ctx-aug`. Uses an OpenAI-compatible end
 
   "sidekick": {
     "enabled": true,
-    "endpoint": "https://api.cerebras.ai/v1",
-    "model": "qwen-3-235b-a22b-instruct-2507",
-    "api_key": "..."
+    "model": "github-copilot/gpt-5.4",
+    "fallback_models": ["anthropic/claude-sonnet-4-6"],
+    "timeout_ms": 30000
   }
 }
 ```
