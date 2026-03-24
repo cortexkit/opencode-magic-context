@@ -2,8 +2,10 @@ import { DEFAULT_COMPARTMENT_TOKEN_BUDGET } from "../../config/schema/magic-cont
 import { getLastCompartmentEndMessage } from "../../features/magic-context/compartment-storage";
 import { type ContextDatabase, updateSessionMeta } from "../../features/magic-context/storage";
 import type { PluginContext } from "../../plugin/types";
+import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
 import { getActiveCompartmentRun, startCompartmentAgent } from "./compartment-runner";
+import { runCompressionPassIfNeeded } from "./compartment-runner-compressor";
 import { BLOCK_UNTIL_DONE_PERCENTAGE, FORCE_MATERIALIZE_PERCENTAGE } from "./compartment-trigger";
 import {
     type PreparedCompartmentInjection,
@@ -156,6 +158,40 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
             );
             awaitedCompartmentRun = true;
             compartmentInProgress = false;
+        }
+    }
+
+    // ── Independent compressor check ──────────────────────────────────────
+    // The compressor normally runs after a successful historian publication.
+    // But if historian hasn't fired (e.g., usage stayed low due to aggressive
+    // heuristic cleanup from system-prompt flushes), the history block can
+    // exceed the budget indefinitely. Run the compressor independently when:
+    //   - budget is configured
+    //   - client is available (compressor creates child sessions)
+    //   - no historian is currently running
+    //   - no historian ran this pass (compressor already fires post-historian)
+    if (
+        args.historyBudgetTokens &&
+        args.historyBudgetTokens > 0 &&
+        args.client &&
+        !compartmentInProgress &&
+        !awaitedCompartmentRun
+    ) {
+        try {
+            await runCompressionPassIfNeeded({
+                client: args.client,
+                db: args.db,
+                sessionId: args.sessionId,
+                directory: args.compartmentDirectory,
+                historyBudgetTokens: args.historyBudgetTokens,
+                historianTimeoutMs: args.historianTimeoutMs,
+            });
+        } catch (error: unknown) {
+            sessionLog(
+                args.sessionId,
+                "transform: independent compressor check failed:",
+                getErrorMessage(error),
+            );
         }
     }
 
