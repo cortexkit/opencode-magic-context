@@ -21,6 +21,7 @@ Syntax: "3-5", "1,2,9", or "1-5,8,12-15". Last ${protectedTags} tags are protect
 Use \`ctx_note\` to save short session notes for durable goals, constraints, decisions, and reminders you want to persist for this session.
 Use \`ctx_memory\` to manage cross-session project memories. Write new memories, delete stale ones, promote important ones to permanent status, or list stored memories by category. Memories persist across sessions and are automatically injected into new sessions.
 Use \`ctx_recall\` to search cross-session project memories using natural language queries. Returns relevant memories ranked by semantic + keyword relevance. Use this to find previously stored architecture decisions, constraints, user preferences, config defaults, and other project knowledge.
+Use \`ctx_expand\` to decompress a compartment range to see the original conversation transcript. Use \`start\`/\`end\` from \`<compartment start=N end=M>\` attributes. Returns the compacted U:/A: transcript for that message range, capped at ~15K tokens.
 NEVER drop large ranges blindly (e.g., "1-50"). Review each tag before deciding.
 NEVER drop user messages — they are short and will be summarized by compartmentalization automatically. Dropping them loses context the historian needs.
 NEVER drop assistant text messages unless they are exceptionally large. Your conversation messages are lightweight; only large tool outputs are worth dropping.
