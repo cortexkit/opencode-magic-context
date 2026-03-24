@@ -5,19 +5,43 @@ import * as path from "node:path";
 const logFile = path.join(os.tmpdir(), "magic-context.log");
 const isTestEnv = process.env.NODE_ENV === "test";
 
-// Intentional: appendFileSync is used instead of async I/O to guarantee log ordering
-// across rapid sequential calls. The cost is ~0.1ms per call on SSD, acceptable for
-// the ~20-50 log calls per transform pass. Buffered async would risk log loss on crash
-// and complicate ordering. See audit finding #4.
+let buffer: string[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+const FLUSH_INTERVAL_MS = 500;
+const BUFFER_SIZE_LIMIT = 50;
+
+function flush(): void {
+    if (buffer.length === 0) return;
+    const data = buffer.join("");
+    buffer = [];
+    try {
+        fs.appendFileSync(logFile, data);
+    } catch {
+        // Intentional: logging must never throw
+    }
+}
+
+function scheduleFlush(): void {
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+        flushTimer = null;
+        flush();
+    }, FLUSH_INTERVAL_MS);
+}
 
 export function log(message: string, data?: unknown): void {
     if (isTestEnv) return;
     try {
         const timestamp = new Date().toISOString();
         const serialized = data === undefined ? "" : ` ${JSON.stringify(data)}`;
-        fs.appendFileSync(logFile, `[${timestamp}] ${message}${serialized}\n`);
-    } catch (_error) {
-        return;
+        buffer.push(`[${timestamp}] ${message}${serialized}\n`);
+        if (buffer.length >= BUFFER_SIZE_LIMIT) {
+            flush();
+        } else {
+            scheduleFlush();
+        }
+    } catch {
+        // Intentional: logging must never throw
     }
 }
 
