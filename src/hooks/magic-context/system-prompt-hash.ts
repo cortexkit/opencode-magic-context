@@ -67,7 +67,12 @@ export function createSystemPromptHashHandler(deps: {
                 `system prompt hash changed: ${previousHash} → ${currentHash} (len=${systemContent.length}), triggering flush`,
             );
             deps.flushedSessions.add(sessionId);
-            deps.lastHeuristicsTurnId.delete(sessionId);
+            // NOTE: Do NOT clear lastHeuristicsTurnId here. The system transform
+            // also fires during /dump-context (a read-only operation) and we cannot
+            // distinguish dump from live chat. Clearing the heuristic guard would let
+            // the messages transform re-execute heuristic cleanup on the same user turn,
+            // causing unintended drops during dumps. The flush flag alone is sufficient;
+            // the messages transform will run heuristics on the next real user turn.
         } else if (previousHash === 0) {
             sessionLog(
                 sessionId,
