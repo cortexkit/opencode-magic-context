@@ -390,11 +390,10 @@ export function promoteRecompStaging(
     compartments: CompartmentInput[];
     facts: Array<{ category: string; content: string }>;
 } | null {
-    const staging = getRecompStaging(db, sessionId);
-    if (!staging || staging.compartments.length === 0) return null;
-
     const now = Date.now();
-    db.transaction(() => {
+    return db.transaction(() => {
+        const staging = getRecompStaging(db, sessionId);
+        if (!staging || staging.compartments.length === 0) return null;
         // Replace real tables
         db.prepare("DELETE FROM compartments WHERE session_id = ?").run(sessionId);
         db.prepare("DELETE FROM session_facts WHERE session_id = ?").run(sessionId);
@@ -431,9 +430,9 @@ export function promoteRecompStaging(
         db.prepare(
             "UPDATE session_meta SET memory_block_cache = '', memory_block_count = 0 WHERE session_id = ?",
         ).run(sessionId);
-    })();
 
-    return { compartments: staging.compartments, facts: staging.facts };
+        return { compartments: staging.compartments, facts: staging.facts };
+    })();
 }
 
 /** Clear staging tables for a session (on cancel/abandon or after successful promote). */

@@ -44,7 +44,8 @@ import { sendIgnoredMessage } from "./send-session-notification";
 import { createSystemPromptHashHandler } from "./system-prompt-hash";
 
 const DREAM_SCHEDULE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
-let lastScheduleCheckMs = 0;
+// NOTE: lastScheduleCheckMs is intentionally inside createMagicContextHook (not module scope)
+// so each hook instance has independent dream-schedule tracking across projects.
 
 export interface MagicContextDeps {
     client: PluginContext["client"];
@@ -136,6 +137,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
     const projectPath = resolveProjectIdentity(deps.directory);
     registerDreamProjectDirectory(projectPath, deps.directory);
 
+    let lastScheduleCheckMs = 0;
     const nudgePlacements = createNudgePlacementStore(db);
     const flushedSessions = new Set<string>();
     const lastHeuristicsTurnId = new Map<string, string>();

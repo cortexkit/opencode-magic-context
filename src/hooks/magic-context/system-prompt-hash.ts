@@ -55,7 +55,8 @@ export function createSystemPromptHashHandler(deps: {
         let sessionMeta: import("../../features/magic-context/types").SessionMeta | undefined;
         try {
             sessionMeta = getOrCreateSessionMeta(deps.db, sessionId);
-        } catch {
+        } catch (error) {
+            sessionLog(sessionId, "system-prompt-hash DB update failed:", error);
             return;
         }
 

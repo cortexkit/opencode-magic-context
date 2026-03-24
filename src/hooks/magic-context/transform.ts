@@ -217,7 +217,6 @@ export function createTransform(deps: TransformDeps) {
                 deps.historyBudgetPercentage && contextUsage.percentage > 0
                     ? Math.floor(
                           (contextUsage.inputTokens / (contextUsage.percentage / 100)) *
-                              (contextUsage.percentage / 100) *
                               deps.historyBudgetPercentage,
                       )
                     : undefined,

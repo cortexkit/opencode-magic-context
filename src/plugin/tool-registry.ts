@@ -6,7 +6,6 @@ import {
     clearEmbeddingsForProject,
     getStoredModelId,
     initializeEmbedding,
-    loadAllEmbeddings,
 } from "../features/magic-context/memory";
 import { getEmbeddingModelId } from "../features/magic-context/memory/embedding";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
@@ -54,7 +53,10 @@ export function createToolRegistry(args: {
     if (memoryEnabled) {
         const currentModelId = getEmbeddingModelId();
         const storedModelId = getStoredModelId(db, projectPath);
-        const hasEmbeddings = loadAllEmbeddings(db, projectPath).size > 0;
+        const hasEmbeddings =
+            (db
+                .prepare("SELECT 1 FROM memory_embeddings WHERE project_path = ? LIMIT 1")
+                .get(projectPath) as { 1: number } | null) !== null;
 
         if (hasEmbeddings && storedModelId !== currentModelId) {
             clearEmbeddingsForProject(db, projectPath);

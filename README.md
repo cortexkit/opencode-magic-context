@@ -54,7 +54,7 @@ Create `magic-context.jsonc` in your project root, `.opencode/`, or `~/.config/o
 
   // Which model the historian uses for background compression
   "historian": {
-    "model": "anthropic/claude-haiku-4",
+    "model": "anthropic/claude-sonnet-4-6",
     "fallback_models": ["anthropic/claude-3-5-haiku"]
   }
 }
