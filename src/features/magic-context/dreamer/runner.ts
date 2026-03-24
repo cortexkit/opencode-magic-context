@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { DREAMER_AGENT } from "../../../agents/dreamer";
 import type { DreamingTask } from "../../../config/schema/magic-context";
 import type { PluginContext } from "../../../plugin/types";
@@ -65,14 +67,19 @@ export async function runDream(args: {
             let agentSessionId: string | null = null;
 
             try {
-                const taskPrompt = [
-                    DREAMER_SYSTEM_PROMPT,
-                    "",
-                    buildDreamTaskPrompt(taskName, {
-                        projectPath: args.projectPath,
-                        lastDreamAt,
-                    }),
-                ].join("\n");
+                const existingDocs =
+                    taskName === "maintain-docs"
+                        ? {
+                              architecture: existsSync(join(args.projectPath, "ARCHITECTURE.md")),
+                              structure: existsSync(join(args.projectPath, "STRUCTURE.md")),
+                          }
+                        : undefined;
+
+                const taskPrompt = buildDreamTaskPrompt(taskName, {
+                    projectPath: args.projectPath,
+                    lastDreamAt,
+                    existingDocs,
+                });
 
                 const createResponse = await args.client.session.create({
                     body: {
