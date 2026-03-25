@@ -23,8 +23,8 @@ export const Scene5Memory: React.FC = () => {
   // Frame ranges
   const SESSION_CLOSE_START = 20;
   const SESSION_CLOSE_END = 60;
-  const SESSION_OPEN_START = 80;
-  const SESSION_OPEN_END = 120;
+  const SESSION_OPEN_START = 90;
+  const SESSION_OPEN_END = 130;
   const MEMORY_ENTER = 140;
   const MESSAGE_ENTER = 280;
 
@@ -49,7 +49,7 @@ export const Scene5Memory: React.FC = () => {
   // "Session ended" label
   const sessionEndedOpacity = interpolate(
     frame,
-    [SESSION_CLOSE_END - 10, SESSION_CLOSE_END, SESSION_CLOSE_END + 20, SESSION_OPEN_START],
+    [SESSION_CLOSE_END - 10, SESSION_CLOSE_END, SESSION_CLOSE_END + 3, SESSION_OPEN_START - 5],
     [0, 1, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );

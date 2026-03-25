@@ -66,7 +66,7 @@ export const Scene0Hook: React.FC = () => {
   // Title card
   const titleOpacity = interpolate(
     frame,
-    [TITLE_START, TITLE_START + 8, TITLE_END - 5, TITLE_END],
+    [TITLE_START, TITLE_START + 5, TITLE_END - 5, TITLE_END],
     [0, 1, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
