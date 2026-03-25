@@ -205,6 +205,7 @@ export function createTransform(deps: TransformDeps) {
         );
         const isCacheBusting =
             deps.flushedSessions.has(sessionId) || schedulerDecision === "execute";
+        const rawGetNotifParams = deps.getNotificationParams;
         const compartmentPhase = await runCompartmentPhase({
             canRunCompartments,
             fullFeatureMode,
@@ -230,8 +231,8 @@ export function createTransform(deps: TransformDeps) {
                 ? resolveProjectIdentity(deps.directory ?? process.cwd())
                 : undefined,
             injectionBudgetTokens: deps.memoryConfig?.injectionBudgetTokens,
-            getNotificationParams: deps.getNotificationParams
-                ? () => deps.getNotificationParams!(sessionId)
+            getNotificationParams: rawGetNotifParams
+                ? () => rawGetNotifParams(sessionId)
                 : undefined,
             cacheAlreadyBusting: isCacheBusting,
         });

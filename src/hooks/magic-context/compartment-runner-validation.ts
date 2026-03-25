@@ -28,8 +28,8 @@ function healCompartmentGaps(
     const MAX_HEALABLE_GAP = 15;
 
     for (let i = 1; i < compartments.length; i++) {
-        const prev = compartments[i - 1]!;
-        const curr = compartments[i]!;
+        const prev = compartments[i - 1];
+        const curr = compartments[i];
         const expectedStart = prev.endMessage + 1;
         const gapSize = curr.startMessage - expectedStart;
 
