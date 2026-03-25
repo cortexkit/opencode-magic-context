@@ -23,19 +23,15 @@
 
 ## Get Started
 
-```sh
-npm install @cortexkit/magic-context-opencode
-```
-
 Add to your OpenCode config (`opencode.json` or `opencode.jsonc`):
 
 ```jsonc
 {
-  "plugins": ["@cortexkit/magic-context-opencode"]
+  "plugins": ["@cortexkit/magic-context-opencode@latest"]
 }
 ```
 
-Magic Context replaces OpenCode's built-in compaction — the two cannot run together:
+Magic Context conflicts with OpenCode's built-in compaction — the two cannot run together. To disable it:
 
 ```jsonc
 {

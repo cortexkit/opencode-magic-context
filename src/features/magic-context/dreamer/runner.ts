@@ -7,7 +7,7 @@ import type { PluginContext } from "../../../plugin/types";
 import * as shared from "../../../shared";
 import { getErrorMessage } from "../../../shared/error-message";
 import { log } from "../../../shared/logger";
-import { extractLatestAssistantText } from "../../../tools/look-at/assistant-message-extractor";
+import { extractLatestAssistantText } from "../../../shared/assistant-message-extractor";
 import { acquireLease, getLeaseHolder, releaseLease, renewLease } from "./lease";
 import { clearStaleEntries, dequeueNext, removeDreamEntry } from "./queue";
 import { getDreamState, setDreamState } from "./storage-dream-state";

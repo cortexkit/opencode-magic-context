@@ -3,7 +3,7 @@ import type { SidekickConfig } from "../../../config/schema/magic-context";
 import type { PluginContext } from "../../../plugin/types";
 import * as shared from "../../../shared";
 import { log, sessionLog } from "../../../shared/logger";
-import { extractLatestAssistantText } from "../../../tools/look-at/assistant-message-extractor";
+import { extractLatestAssistantText } from "../../../shared/assistant-message-extractor";
 
 export const SIDEKICK_SYSTEM_PROMPT = `You are Sidekick, a focused memory-retrieval subagent for an AI coding assistant.
 

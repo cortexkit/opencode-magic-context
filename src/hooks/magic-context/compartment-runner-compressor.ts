@@ -10,7 +10,7 @@ import type { PluginContext } from "../../plugin/types";
 import { normalizeSDKResponse, promptSyncWithModelSuggestionRetry } from "../../shared";
 import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
-import { extractLatestAssistantText } from "../../tools/look-at/assistant-message-extractor";
+import { extractLatestAssistantText } from "../../shared/assistant-message-extractor";
 import { parseCompartmentOutput } from "./compartment-parser";
 import { buildCompressorPrompt } from "./compartment-prompt";
 import { estimateTokens } from "./read-session-formatting";

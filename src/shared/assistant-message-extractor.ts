@@ -15,7 +15,7 @@ type SessionMessage = {
     parts?: unknown;
 };
 
-import { isRecord } from "../../shared/record-type-guard";
+import { isRecord } from "./record-type-guard";
 
 function asSessionMessage(value: unknown): SessionMessage | null {
     if (!isRecord(value)) return null;
