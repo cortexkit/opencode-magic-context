@@ -50,7 +50,9 @@ export function createSystemPromptHashHandler(deps: {
         const systemContent = output.system.join("\n");
         if (systemContent.length === 0) return;
 
-        const currentHash = String(Bun.hash(systemContent));
+        // Use hex digest — numeric strings get coerced by SQLite INTEGER column affinity,
+        // causing precision loss on read-back and infinite hash-change flushes.
+        const currentHash = new Bun.CryptoHasher("md5").update(systemContent).digest("hex");
 
         let sessionMeta: import("../../features/magic-context/types").SessionMeta | undefined;
         try {
