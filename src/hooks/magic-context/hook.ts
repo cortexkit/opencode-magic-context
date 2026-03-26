@@ -25,6 +25,7 @@ import { getErrorMessage } from "../../shared/error-message";
 import { log } from "../../shared/logger";
 import { createMagicContextCommandHandler } from "./command-handler";
 import { createEventHandler } from "./event-handler";
+import { clearInjectionCache } from "./inject-compartments";
 import { createNudger } from "./nudger";
 import { createTextCompleteHandler } from "./text-complete";
 import { createNudgePlacementStore, createTransform } from "./transform";
@@ -188,7 +189,10 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         tagger: deps.tagger,
         db,
         nudgePlacements,
-        onSessionCacheInvalidated: deps.onSessionCacheInvalidated,
+        onSessionCacheInvalidated: (sessionId: string) => {
+            clearInjectionCache(sessionId);
+            deps.onSessionCacheInvalidated?.(sessionId);
+        },
     });
 
     const runDreamQueueInBackground = (): void => {

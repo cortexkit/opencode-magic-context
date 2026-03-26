@@ -229,7 +229,8 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
     } catch (error) {
         sessionLog(args.sessionId, "transform failed applying pending operations:", error);
         updateSessionMeta(args.db, args.sessionId, { lastTransformError: getErrorMessage(error) });
-        args.nudgePlacements.clear(args.sessionId);
+        // Only clear on cache-busting passes to avoid re-anchor on next defer.
+        if (isCacheBustingPass) args.nudgePlacements.clear(args.sessionId);
     }
     // Only clear nudge placements on cache-busting passes. Clearing on defer would
     // cause the next pass to re-anchor the nudge on a cached assistant message (Finding 2).
