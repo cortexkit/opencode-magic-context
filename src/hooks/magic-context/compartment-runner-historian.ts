@@ -5,8 +5,8 @@ import { HISTORIAN_AGENT } from "../../agents/historian";
 import { DEFAULT_HISTORIAN_TIMEOUT_MS } from "../../config/schema/magic-context";
 import type { PluginContext } from "../../plugin/types";
 import * as shared from "../../shared";
-import { getErrorMessage } from "../../shared/error-message";
 import { extractLatestAssistantText } from "../../shared/assistant-message-extractor";
+import { getErrorMessage } from "../../shared/error-message";
 import type {
     HistorianProgressCallbacks,
     HistorianRunResult,

@@ -23,7 +23,10 @@ export type AgentModelRequirement = {
 const HISTORIAN_FALLBACK_CHAIN: FallbackEntry[] = [
     { providers: ["github-copilot", "anthropic", "opencode"], model: "claude-sonnet-4-6" },
     { providers: ["opencode-go"], model: "minimax-m2.7" },
-    { providers: ["zai-coding-plan", "bailian-coding-plan", "opencode-go", "opencode"], model: "glm-5" },
+    {
+        providers: ["zai-coding-plan", "bailian-coding-plan", "opencode-go", "opencode"],
+        model: "glm-5",
+    },
     { providers: ["openai", "github-copilot", "opencode"], model: "gpt-5.4" },
     { providers: ["google", "github-copilot", "opencode"], model: "gemini-3.1-pro" },
 ];
@@ -33,7 +36,10 @@ const HISTORIAN_FALLBACK_CHAIN: FallbackEntry[] = [
 const DREAMER_FALLBACK_CHAIN: FallbackEntry[] = [
     { providers: ["github-copilot", "anthropic", "opencode"], model: "claude-sonnet-4-6" },
     { providers: ["google", "github-copilot", "opencode"], model: "gemini-3-flash" },
-    { providers: ["zai-coding-plan", "bailian-coding-plan", "opencode-go", "opencode"], model: "glm-5" },
+    {
+        providers: ["zai-coding-plan", "bailian-coding-plan", "opencode-go", "opencode"],
+        model: "glm-5",
+    },
     { providers: ["opencode-go"], model: "minimax-m2.7" },
     { providers: ["github-copilot", "openai", "opencode"], model: "gpt-5.4-mini" },
 ];

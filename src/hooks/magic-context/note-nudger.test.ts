@@ -3,7 +3,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { addSessionNote } from "../../features/magic-context/storage-notes";
-import { clearNoteNudgeState, getNoteNudgeText, onNoteTrigger } from "./note-nudger";
+import { clearNoteNudgeState, onNoteTrigger } from "./note-nudger";
 
 const dbs: Database[] = [];
 

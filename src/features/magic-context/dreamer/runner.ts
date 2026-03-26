@@ -5,9 +5,9 @@ import { DREAMER_AGENT } from "../../../agents/dreamer";
 import type { DreamingTask } from "../../../config/schema/magic-context";
 import type { PluginContext } from "../../../plugin/types";
 import * as shared from "../../../shared";
+import { extractLatestAssistantText } from "../../../shared/assistant-message-extractor";
 import { getErrorMessage } from "../../../shared/error-message";
 import { log } from "../../../shared/logger";
-import { extractLatestAssistantText } from "../../../shared/assistant-message-extractor";
 import { acquireLease, getLeaseHolder, releaseLease, renewLease } from "./lease";
 import {
     clearStaleEntries,
