@@ -4,5 +4,5 @@ export function normalizeMemoryContent(content: string): string {
 
 export function computeNormalizedHash(content: string): string {
     const normalized = normalizeMemoryContent(content);
-    return String(Bun.hash(normalized));
+    return new Bun.CryptoHasher("md5").update(normalized).digest("hex");
 }

@@ -52,6 +52,25 @@ function mergeConfigs(
     const config: MagicContextPluginConfig = {
         ...base,
         ...override,
+        // Deep-merge nested config objects so partial overrides don't lose base values
+        memory: {
+            ...(base.memory ?? {}),
+            ...(override.memory ?? {}),
+        } as MagicContextPluginConfig["memory"],
+        embedding: (override.embedding ?? base.embedding) as MagicContextPluginConfig["embedding"],
+        historian: override.historian ?? base.historian,
+        dreamer: override.dreamer
+            ? ({
+                  ...(base.dreamer ?? {}),
+                  ...override.dreamer,
+              } as MagicContextPluginConfig["dreamer"])
+            : base.dreamer,
+        sidekick: override.sidekick
+            ? ({
+                  ...(base.sidekick ?? {}),
+                  ...override.sidekick,
+              } as MagicContextPluginConfig["sidekick"])
+            : base.sidekick,
         disabled_hooks: [
             ...new Set([...(base.disabled_hooks ?? []), ...(override.disabled_hooks ?? [])]),
         ],
@@ -75,7 +94,10 @@ function parsePluginConfig(rawConfig: Record<string, unknown>): MagicContextPlug
             : undefined;
 
     if (!parsed.success) {
-        return { disabled_hooks: disabledHooks, command } as MagicContextPluginConfig;
+        // Return safe defaults with enabled:false so downstream code has all required fields
+        // instead of an incomplete cast that would produce undefined for 18+ properties.
+        const defaults = MagicContextConfigSchema.parse({});
+        return { ...defaults, enabled: false, disabled_hooks: disabledHooks, command };
     }
 
     const config: MagicContextPluginConfig = {

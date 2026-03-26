@@ -15,12 +15,18 @@ export function parseScheduleWindow(
     const match = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/.exec(schedule.trim());
     if (!match) return null;
 
-    const startMinutes = Number(match[1]) * 60 + Number(match[2]);
-    const endMinutes = Number(match[3]) * 60 + Number(match[4]);
+    const startHour = Number(match[1]);
+    const startMin = Number(match[2]);
+    const endHour = Number(match[3]);
+    const endMin = Number(match[4]);
 
-    if (startMinutes < 0 || startMinutes >= 1440 || endMinutes < 0 || endMinutes >= 1440) {
+    // Reject invalid hour/minute values (e.g. "0:99" or "25:00")
+    if (startHour >= 24 || startMin >= 60 || endHour >= 24 || endMin >= 60) {
         return null;
     }
+
+    const startMinutes = startHour * 60 + startMin;
+    const endMinutes = endHour * 60 + endMin;
 
     return { startMinutes, endMinutes };
 }

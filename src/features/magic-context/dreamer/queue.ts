@@ -16,7 +16,8 @@ export function ensureDreamQueueTable(db: Database): void {
             project_path TEXT NOT NULL,
             reason TEXT NOT NULL,
             enqueued_at INTEGER NOT NULL,
-            started_at INTEGER
+            started_at INTEGER,
+            retry_count INTEGER DEFAULT 0
         )
     `);
     db.run("CREATE INDEX IF NOT EXISTS idx_dream_queue_project ON dream_queue(project_path)");

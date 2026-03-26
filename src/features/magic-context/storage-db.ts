@@ -18,6 +18,7 @@ function resolveDatabasePath(): { dbDir: string; dbPath: string } {
 export function initializeDatabase(db: Database): void {
     db.run("PRAGMA journal_mode=WAL");
     db.run("PRAGMA busy_timeout=5000");
+    db.run("PRAGMA foreign_keys=ON");
     db.run(`
     CREATE TABLE IF NOT EXISTS tags (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
