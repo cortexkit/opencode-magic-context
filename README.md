@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/@cortexkit/magic-context-opencode"><img src="https://img.shields.io/npm/v/@cortexkit/magic-context-opencode?color=blue&style=flat-square" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@cortexkit/opencode-magic-context"><img src="https://img.shields.io/npm/v/@cortexkit/opencode-magic-context?color=blue&style=flat-square" alt="npm"></a>
   <a href="https://github.com/cortexkit/opencode-magic-context/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"></a>
 </p>
 
@@ -31,7 +31,7 @@ Add to your OpenCode config (`opencode.json` or `opencode.jsonc`):
 
 ```jsonc
 {
-  "plugins": ["@cortexkit/magic-context-opencode@latest"]
+  "plugins": ["@cortexkit/opencode-magic-context@latest"]
 }
 ```
 

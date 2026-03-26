@@ -1,5 +1,5 @@
 {
-  "name": "@cortexkit/magic-context-opencode",
+  "name": "@cortexkit/opencode-magic-context",
   "version": "0.1.0",
   "type": "module",
   "description": "OpenCode plugin for Magic Context — cross-session memory and context management",
