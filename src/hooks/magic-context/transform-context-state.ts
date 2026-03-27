@@ -29,6 +29,7 @@ export function resolveSchedulerDecision(
     sessionMeta: SessionMeta,
     contextUsage: ContextUsage,
     sessionId: string,
+    modelKey?: string,
 ): "execute" | "defer" {
     try {
         const schedulerDecision = scheduler.shouldExecute(
@@ -36,6 +37,7 @@ export function resolveSchedulerDecision(
             contextUsage,
             undefined,
             sessionId,
+            modelKey,
         );
         sessionLog(
             sessionId,

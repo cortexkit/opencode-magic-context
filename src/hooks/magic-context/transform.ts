@@ -68,6 +68,7 @@ export interface TransformDeps {
     getNotificationParams?: (
         sessionId: string,
     ) => import("./send-session-notification").NotificationParams;
+    getModelKey?: (sessionId: string) => string | undefined;
 }
 
 export function createTransform(deps: TransformDeps) {
@@ -113,6 +114,7 @@ export function createTransform(deps: TransformDeps) {
             sessionMeta,
             contextUsageEarly,
             sessionId,
+            deps.getModelKey?.(sessionId),
         );
         const isCacheBusting =
             deps.flushedSessions.has(sessionId) || schedulerDecisionEarly === "execute";

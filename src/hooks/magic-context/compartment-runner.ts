@@ -10,6 +10,9 @@ export function getActiveCompartmentRun(sessionId: string): Promise<void> | unde
 }
 
 export function startCompartmentAgent(deps: CompartmentRunnerDeps): void {
+    // Intentional: this check-then-set is safe in Bun's single-threaded event loop.
+    // The synchronous code between activeRuns.get() and activeRuns.set() cannot interleave,
+    // so another start for the same session cannot sneak in here.
     const existing = activeRuns.get(deps.sessionId);
     if (existing) {
         return;

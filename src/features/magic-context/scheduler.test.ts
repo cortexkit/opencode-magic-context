@@ -1,3 +1,5 @@
+/// <reference types="bun-types" />
+
 import { describe, expect, it } from "bun:test";
 import { createScheduler, parseCacheTtl } from "./scheduler";
 import type { ContextUsage, SessionMeta } from "./types";
@@ -18,6 +20,7 @@ function createSessionMeta(overrides: Partial<SessionMeta> = {}): SessionMeta {
         lastInputTokens: 0,
         timesExecuteThresholdReached: 0,
         compartmentInProgress: false,
+        systemPromptHash: "",
         ...overrides,
     };
 }
@@ -70,6 +73,23 @@ describe("createScheduler", () => {
         expect(scheduler.shouldExecute(sessionMeta, createContextUsage(70), BASE_TIME)).toBe(
             "execute",
         );
+    });
+
+    it("uses a model-specific execute threshold when modelKey is provided", () => {
+        const scheduler = createScheduler({
+            executeThresholdPercentage: { default: 70, "openai/gpt-4o": 60 },
+        });
+        const sessionMeta = createSessionMeta({ lastResponseTime: BASE_TIME - 10_000 });
+
+        expect(
+            scheduler.shouldExecute(
+                sessionMeta,
+                createContextUsage(65),
+                BASE_TIME,
+                undefined,
+                "openai/gpt-4o",
+            ),
+        ).toBe("execute");
     });
 
     it("falls back to 5m default when cacheTtl is invalid", () => {

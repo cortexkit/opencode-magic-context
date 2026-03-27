@@ -65,9 +65,19 @@ export function createExistingTagResolver(
     tagger: Tagger,
     db: ContextDatabase,
 ): ExistingTagResolver {
-    const assignments = new Map(tagger.getAssignments(sessionId));
-    const scopedAssignments = createScopedAssignments(assignments);
+    const assignments = tagger.getAssignments(sessionId);
+    let cachedAssignmentSize = -1;
+    let cachedScopedAssignments: Map<string, ScopedAssignments> | null = null;
     const usedTagNumbers = new Set<number>();
+
+    function getScopedAssignments(): Map<string, ScopedAssignments> {
+        if (!cachedScopedAssignments || cachedAssignmentSize !== assignments.size) {
+            cachedScopedAssignments = createScopedAssignments(assignments);
+            cachedAssignmentSize = assignments.size;
+        }
+
+        return cachedScopedAssignments;
+    }
 
     return {
         resolve(messageId, type, currentContentId, ordinal) {
@@ -77,14 +87,13 @@ export function createExistingTagResolver(
                 return exactTagId;
             }
 
-            const fallback = scopedAssignments.get(messageId)?.[type][ordinal];
+            const fallback = getScopedAssignments().get(messageId)?.[type][ordinal];
             if (!fallback || usedTagNumbers.has(fallback.tagNumber)) {
                 return undefined;
             }
 
             updateTagMessageId(db, sessionId, fallback.tagNumber, currentContentId);
             tagger.bindTag(sessionId, currentContentId, fallback.tagNumber);
-            assignments.set(currentContentId, fallback.tagNumber);
             usedTagNumbers.add(fallback.tagNumber);
             return fallback.tagNumber;
         },

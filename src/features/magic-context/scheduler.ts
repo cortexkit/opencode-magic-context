@@ -17,6 +17,7 @@ export interface Scheduler {
         contextUsage: ContextUsage,
         currentTime?: number,
         sessionId?: string,
+        modelKey?: string,
     ): SchedulerDecision;
 }
 
@@ -48,10 +49,11 @@ export function createScheduler(config: SchedulerConfig): Scheduler {
             contextUsage: ContextUsage,
             currentTime: number = Date.now(),
             sessionId?: string,
+            modelKey?: string,
         ): SchedulerDecision {
             const threshold = resolveExecuteThreshold(
                 config.executeThresholdPercentage,
-                undefined,
+                modelKey,
                 65,
             );
             if (contextUsage.percentage >= threshold) {

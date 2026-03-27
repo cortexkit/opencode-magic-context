@@ -1,12 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 
-import { getErrorMessage } from "./error-message";
-
-export interface JsoncParseResult<T> {
-    data: T | null;
-    errors: Array<{ message: string; offset: number; length: number }>;
-}
-
 function stripJsonComments(content: string): string {
     let result = "";
     let inString = false;
@@ -116,26 +109,6 @@ function stripTrailingCommas(content: string): string {
 export function parseJsonc<T = unknown>(content: string): T {
     const normalized = stripTrailingCommas(stripJsonComments(content));
     return JSON.parse(normalized) as T;
-}
-
-export function parseJsoncSafe<T = unknown>(content: string): JsoncParseResult<T> {
-    try {
-        return {
-            data: parseJsonc<T>(content),
-            errors: [],
-        };
-    } catch (error) {
-        return {
-            data: null,
-            errors: [
-                {
-                    message: getErrorMessage(error),
-                    offset: 0,
-                    length: content.length,
-                },
-            ],
-        };
-    }
 }
 
 export function readJsoncFile<T = unknown>(filePath: string): T | null {

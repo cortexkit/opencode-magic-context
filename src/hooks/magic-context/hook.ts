@@ -25,6 +25,7 @@ import { getErrorMessage } from "../../shared/error-message";
 import { log } from "../../shared/logger";
 import { createMagicContextCommandHandler } from "./command-handler";
 import { createEventHandler } from "./event-handler";
+import { resolveModelKey } from "./event-resolvers";
 import { clearInjectionCache } from "./inject-compartments";
 import { createNudger } from "./nudger";
 import { createTextCompleteHandler } from "./text-complete";
@@ -186,6 +187,10 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         historianTimeoutMs: deps.config.historian_timeout_ms ?? DEFAULT_HISTORIAN_TIMEOUT_MS,
         getNotificationParams: (sessionId) =>
             getLiveNotificationParams(sessionId, liveModelBySession, variantBySession),
+        getModelKey: (sessionId) => {
+            const model = liveModelBySession.get(sessionId);
+            return resolveModelKey(model?.providerID, model?.modelID);
+        },
     });
     const eventHandler = createEventHandler({
         contextUsageMap,

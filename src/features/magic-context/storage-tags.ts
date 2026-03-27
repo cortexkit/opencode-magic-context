@@ -4,6 +4,8 @@ import type { TagEntry } from "./types";
 type PreparedStatement = ReturnType<Database["prepare"]>;
 
 const insertTagStatements = new WeakMap<Database, PreparedStatement>();
+const updateTagStatusStatements = new WeakMap<Database, PreparedStatement>();
+const updateTagMessageIdStatements = new WeakMap<Database, PreparedStatement>();
 
 function getInsertTagStatement(db: Database): PreparedStatement {
     let stmt = insertTagStatements.get(db);
@@ -12,6 +14,24 @@ function getInsertTagStatement(db: Database): PreparedStatement {
             "INSERT INTO tags (session_id, message_id, type, byte_size, tag_number) VALUES (?, ?, ?, ?, ?)",
         );
         insertTagStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getUpdateTagStatusStatement(db: Database): PreparedStatement {
+    let stmt = updateTagStatusStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare("UPDATE tags SET status = ? WHERE session_id = ? AND tag_number = ?");
+        updateTagStatusStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getUpdateTagMessageIdStatement(db: Database): PreparedStatement {
+    let stmt = updateTagMessageIdStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare("UPDATE tags SET message_id = ? WHERE session_id = ? AND tag_number = ?");
+        updateTagMessageIdStatements.set(db, stmt);
     }
     return stmt;
 }
@@ -73,11 +93,7 @@ export function updateTagStatus(
     tagId: number,
     status: TagEntry["status"],
 ): void {
-    db.prepare("UPDATE tags SET status = ? WHERE session_id = ? AND tag_number = ?").run(
-        status,
-        sessionId,
-        tagId,
-    );
+    getUpdateTagStatusStatement(db).run(status, sessionId, tagId);
 }
 
 export function updateTagMessageId(
@@ -86,11 +102,7 @@ export function updateTagMessageId(
     tagId: number,
     messageId: string,
 ): void {
-    db.prepare("UPDATE tags SET message_id = ? WHERE session_id = ? AND tag_number = ?").run(
-        messageId,
-        sessionId,
-        tagId,
-    );
+    getUpdateTagMessageIdStatement(db).run(messageId, sessionId, tagId);
 }
 
 export function getTagsBySession(db: Database, sessionId: string): TagEntry[] {

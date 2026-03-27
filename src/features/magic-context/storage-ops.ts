@@ -1,11 +1,53 @@
-// Note on prepared statement caching (audit #15): hot paths in storage-memory-embeddings.ts
-// and storage-tags.ts use WeakMap<Database, PreparedStatement> caching. These storage-ops
-// functions (queuePendingOp, getPendingOps) run a few times per turn and Bun's SQLite driver
-// internally caches prepared statements, so the WeakMap pattern here would save only the
-// db.prepare() call overhead (~0.01ms). Not worth the added complexity.
 import type { Database } from "bun:sqlite";
 import { sessionLog } from "../../shared/logger";
 import type { PendingOp } from "./types";
+
+type PreparedStatement = ReturnType<Database["prepare"]>;
+
+const queuePendingOpStatements = new WeakMap<Database, PreparedStatement>();
+const getPendingOpsStatements = new WeakMap<Database, PreparedStatement>();
+const clearPendingOpsStatements = new WeakMap<Database, PreparedStatement>();
+const removePendingOpStatements = new WeakMap<Database, PreparedStatement>();
+
+function getQueuePendingOpStatement(db: Database): PreparedStatement {
+    let stmt = queuePendingOpStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "INSERT INTO pending_ops (session_id, tag_id, operation, queued_at) VALUES (?, ?, ?, ?)",
+        );
+        queuePendingOpStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getPendingOpsStatement(db: Database): PreparedStatement {
+    let stmt = getPendingOpsStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "SELECT id, session_id, tag_id, operation, queued_at FROM pending_ops WHERE session_id = ? ORDER BY queued_at ASC, id ASC",
+        );
+        getPendingOpsStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getClearPendingOpsStatement(db: Database): PreparedStatement {
+    let stmt = clearPendingOpsStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare("DELETE FROM pending_ops WHERE session_id = ?");
+        clearPendingOpsStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getRemovePendingOpStatement(db: Database): PreparedStatement {
+    let stmt = removePendingOpStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare("DELETE FROM pending_ops WHERE session_id = ? AND tag_id = ?");
+        removePendingOpStatements.set(db, stmt);
+    }
+    return stmt;
+}
 
 interface PendingOpRow {
     id: number;
@@ -49,34 +91,19 @@ export function queuePendingOp(
     operation: PendingOp["operation"],
     queuedAt: number = Date.now(),
 ): void {
-    db.prepare(
-        "INSERT INTO pending_ops (session_id, tag_id, operation, queued_at) VALUES (?, ?, ?, ?)",
-    ).run(sessionId, tagId, operation, queuedAt);
+    getQueuePendingOpStatement(db).run(sessionId, tagId, operation, queuedAt);
 }
 
 export function getPendingOps(db: Database, sessionId: string): PendingOp[] {
-    const rows = db
-        .prepare(
-            "SELECT id, session_id, tag_id, operation, queued_at FROM pending_ops WHERE session_id = ? ORDER BY queued_at ASC, id ASC",
-        )
-        .all(sessionId)
-        .filter(isPendingOpRow);
+    const rows = getPendingOpsStatement(db).all(sessionId).filter(isPendingOpRow);
 
     return rows.map(toPendingOp).filter((op): op is PendingOp => op !== null);
 }
 
-export function hasPendingOps(db: Database, sessionId: string): boolean {
-    const result = db
-        .prepare("SELECT 1 FROM pending_ops WHERE session_id = ? LIMIT 1")
-        .get(sessionId);
-
-    return result !== null && result !== undefined;
-}
-
 export function clearPendingOps(db: Database, sessionId: string): void {
-    db.prepare("DELETE FROM pending_ops WHERE session_id = ?").run(sessionId);
+    getClearPendingOpsStatement(db).run(sessionId);
 }
 
 export function removePendingOp(db: Database, sessionId: string, tagId: number): void {
-    db.prepare("DELETE FROM pending_ops WHERE session_id = ? AND tag_id = ?").run(sessionId, tagId);
+    getRemovePendingOpStatement(db).run(sessionId, tagId);
 }

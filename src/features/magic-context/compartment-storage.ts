@@ -1,5 +1,32 @@
 import type { Database } from "bun:sqlite";
 
+type PreparedStatement = ReturnType<Database["prepare"]>;
+
+const insertCompartmentStatements = new WeakMap<Database, PreparedStatement>();
+const insertFactStatements = new WeakMap<Database, PreparedStatement>();
+
+function getInsertCompartmentStatement(db: Database): PreparedStatement {
+    let stmt = insertCompartmentStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "INSERT INTO compartments (session_id, sequence, start_message, end_message, start_message_id, end_message_id, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        );
+        insertCompartmentStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getInsertFactStatement(db: Database): PreparedStatement {
+    let stmt = insertFactStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare(
+            "INSERT INTO session_facts (session_id, category, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        );
+        insertFactStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
 export interface Compartment {
     id: number;
     sessionId: string;
@@ -84,6 +111,40 @@ export interface CompartmentInput {
     content: string;
 }
 
+function insertCompartmentRows(
+    db: Database,
+    sessionId: string,
+    compartments: CompartmentInput[],
+    now: number,
+): void {
+    const stmt = getInsertCompartmentStatement(db);
+    for (const compartment of compartments) {
+        stmt.run(
+            sessionId,
+            compartment.sequence,
+            compartment.startMessage,
+            compartment.endMessage,
+            compartment.startMessageId,
+            compartment.endMessageId,
+            compartment.title,
+            compartment.content,
+            now,
+        );
+    }
+}
+
+function insertFactRows(
+    db: Database,
+    sessionId: string,
+    facts: Array<{ category: string; content: string }>,
+    now: number,
+): void {
+    const stmt = getInsertFactStatement(db);
+    for (const fact of facts) {
+        stmt.run(sessionId, fact.category, fact.content, now, now);
+    }
+}
+
 function toCompartment(row: CompartmentRow): Compartment {
     return {
         id: row.id,
@@ -135,22 +196,7 @@ export function replaceAllCompartments(
     const now = Date.now();
     db.transaction(() => {
         db.prepare("DELETE FROM compartments WHERE session_id = ?").run(sessionId);
-        const stmt = db.prepare(
-            "INSERT INTO compartments (session_id, sequence, start_message, end_message, start_message_id, end_message_id, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        );
-        for (const c of compartments) {
-            stmt.run(
-                sessionId,
-                c.sequence,
-                c.startMessage,
-                c.endMessage,
-                c.startMessageId,
-                c.endMessageId,
-                c.title,
-                c.content,
-                now,
-            );
-        }
+        insertCompartmentRows(db, sessionId, compartments, now);
     })();
 }
 
@@ -167,22 +213,7 @@ export function appendCompartments(
     if (compartments.length === 0) return;
     const now = Date.now();
     db.transaction(() => {
-        const stmt = db.prepare(
-            "INSERT INTO compartments (session_id, sequence, start_message, end_message, start_message_id, end_message_id, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        );
-        for (const c of compartments) {
-            stmt.run(
-                sessionId,
-                c.sequence,
-                c.startMessage,
-                c.endMessage,
-                c.startMessageId,
-                c.endMessageId,
-                c.title,
-                c.content,
-                now,
-            );
-        }
+        insertCompartmentRows(db, sessionId, compartments, now);
     })();
 }
 
@@ -199,12 +230,7 @@ export function replaceSessionFacts(
     const now = Date.now();
     db.transaction(() => {
         db.prepare("DELETE FROM session_facts WHERE session_id = ?").run(sessionId);
-        const stmt = db.prepare(
-            "INSERT INTO session_facts (session_id, category, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        );
-        for (const f of facts) {
-            stmt.run(sessionId, f.category, f.content, now, now);
-        }
+        insertFactRows(db, sessionId, facts, now);
         // Clear cached memory block so next injection renders fresh
         db.prepare(
             "UPDATE session_meta SET memory_block_cache = '', memory_block_count = 0 WHERE session_id = ?",
@@ -231,29 +257,8 @@ export function replaceAllCompartmentState(
         db.prepare("DELETE FROM compartments WHERE session_id = ?").run(sessionId);
         db.prepare("DELETE FROM session_facts WHERE session_id = ?").run(sessionId);
 
-        const compartmentStmt = db.prepare(
-            "INSERT INTO compartments (session_id, sequence, start_message, end_message, start_message_id, end_message_id, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        );
-        for (const c of compartments) {
-            compartmentStmt.run(
-                sessionId,
-                c.sequence,
-                c.startMessage,
-                c.endMessage,
-                c.startMessageId,
-                c.endMessageId,
-                c.title,
-                c.content,
-                now,
-            );
-        }
-
-        const factStmt = db.prepare(
-            "INSERT INTO session_facts (session_id, category, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        );
-        for (const f of facts) {
-            factStmt.run(sessionId, f.category, f.content, now, now);
-        }
+        insertCompartmentRows(db, sessionId, compartments, now);
+        insertFactRows(db, sessionId, facts, now);
 
         // Clear cached memory block so next injection renders fresh (historian run already busts cache)
         db.prepare(
@@ -401,29 +406,8 @@ export function promoteRecompStaging(
         db.prepare("DELETE FROM compartments WHERE session_id = ?").run(sessionId);
         db.prepare("DELETE FROM session_facts WHERE session_id = ?").run(sessionId);
 
-        const compartmentStmt = db.prepare(
-            "INSERT INTO compartments (session_id, sequence, start_message, end_message, start_message_id, end_message_id, title, content, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        );
-        for (const c of staging.compartments) {
-            compartmentStmt.run(
-                sessionId,
-                c.sequence,
-                c.startMessage,
-                c.endMessage,
-                c.startMessageId,
-                c.endMessageId,
-                c.title,
-                c.content,
-                now,
-            );
-        }
-
-        const factStmt = db.prepare(
-            "INSERT INTO session_facts (session_id, category, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        );
-        for (const f of staging.facts) {
-            factStmt.run(sessionId, f.category, f.content, now, now);
-        }
+        insertCompartmentRows(db, sessionId, staging.compartments, now);
+        insertFactRows(db, sessionId, staging.facts, now);
 
         // Clear staging
         db.prepare("DELETE FROM recomp_compartments WHERE session_id = ?").run(sessionId);

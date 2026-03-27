@@ -28,27 +28,6 @@ export const DEFAULT_DREAMER_TASKS: DreamingTask[] = [
     "improve",
 ];
 
-export const DreamingConfigSchema = z
-    .object({
-        /** Enable dreamer (default: false) */
-        enabled: z.boolean().default(false),
-        /** Scheduled window for overnight dreaming (e.g. "02:00-06:00") */
-        schedule: z.string().default("02:00-06:00"),
-        /** Maximum runtime per dream session in minutes (default: 120) */
-        max_runtime_minutes: z.number().min(10).default(120),
-        /** Tasks to run during dreaming, in order (default: consolidate, verify, archive-stale, improve) */
-        tasks: z.array(DreamingTaskSchema).default(DEFAULT_DREAMER_TASKS),
-        /** Minutes allocated per task before moving to next (default: 20) */
-        task_timeout_minutes: z.number().min(5).default(20),
-    })
-    .default({
-        enabled: false,
-        schedule: "02:00-06:00",
-        max_runtime_minutes: 120,
-        tasks: DEFAULT_DREAMER_TASKS,
-        task_timeout_minutes: 20,
-    });
-
 /** Combined dreamer agent + scheduling configuration */
 export const DreamerConfigSchema = AgentOverrideConfigSchema.merge(
     z.object({
@@ -120,7 +99,6 @@ export const EmbeddingConfigSchema = BaseEmbeddingConfigSchema.transform((data) 
 });
 
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
-export type DreamingConfig = z.infer<typeof DreamingConfigSchema>;
 
 export interface MagicContextConfig {
     enabled: boolean;

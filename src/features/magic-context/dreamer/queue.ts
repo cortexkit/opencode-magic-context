@@ -121,13 +121,3 @@ export function clearStaleEntries(db: Database, maxAgeMs: number): number {
         .run(cutoff);
     return result.changes;
 }
-
-/** Get current queue size (unstarted entries only). */
-export function getQueueSize(db: Database): number {
-    const row = db
-        .query<{ count: number }, []>(
-            "SELECT COUNT(*) as count FROM dream_queue WHERE started_at IS NULL",
-        )
-        .get();
-    return row?.count ?? 0;
-}
