@@ -18,7 +18,7 @@ import {
     type PreparedCompartmentInjection,
     renderCompartmentInjection,
 } from "./inject-compartments";
-import { getNoteNudgeText } from "./note-nudger";
+import { markNoteNudgeDelivered, peekNoteNudgeText } from "./note-nudger";
 import { reinjectNudgeAtAnchor } from "./nudge-injection";
 import type { NudgePlacementStore } from "./nudge-placement-store";
 import type { ContextNudge } from "./nudger";
@@ -377,13 +377,19 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
                 );
             }
         }
-
-        const deferredNoteText = getNoteNudgeText(args.db, args.sessionId);
-        if (deferredNoteText) {
-            const noteInstruction = `\n\n<instruction name="deferred_notes">${deferredNoteText}</instruction>`;
-            appendReminderToLatestUserMessage(args.messages, noteInstruction);
-        }
     } else {
         args.nudgePlacements.clear(args.sessionId);
+    }
+
+    // Note nudges run outside fullFeatureMode — they should work in all sessions
+    // including subagent sessions where fullFeatureMode is false.
+    const deferredNoteText = peekNoteNudgeText(args.db, args.sessionId);
+    if (deferredNoteText) {
+        const noteInstruction = `\n\n<instruction name="deferred_notes">${deferredNoteText}</instruction>`;
+        const anchored = appendReminderToLatestUserMessage(args.messages, noteInstruction);
+        if (anchored) {
+            // Only mark delivered after successful placement
+            markNoteNudgeDelivered(args.sessionId);
+        }
     }
 }

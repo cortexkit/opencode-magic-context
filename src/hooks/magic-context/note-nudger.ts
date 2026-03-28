@@ -15,6 +15,7 @@
 
 import type { Database } from "bun:sqlite";
 import { getSessionNotes } from "../../features/magic-context/storage-notes";
+import { sessionLog } from "../../shared/logger";
 
 export type NoteNudgeTrigger = "historian_complete" | "commit_detected" | "todos_complete";
 
@@ -39,32 +40,53 @@ function getState(sessionId: string): NoteNudgeState {
 /**
  * Signal that a trigger event occurred. Call from hook layer when any of the 3 triggers fire.
  */
-export function onNoteTrigger(sessionId: string, _trigger: NoteNudgeTrigger): void {
+export function onNoteTrigger(sessionId: string, trigger: NoteNudgeTrigger): void {
     const state = getState(sessionId);
     state.triggerPending = true;
+    sessionLog(sessionId, `note-nudge: trigger fired (${trigger}), triggerPending=true`);
 }
 
 /**
- * Check whether a note nudge should be injected during this transform pass.
+ * Peek at whether a note nudge should be injected during this transform pass.
  * Returns the nudge text if yes, null if no.
- *
- * Call from the nudge injection path (transform or nudger).
+ * Does NOT clear triggerPending — call markNoteNudgeDelivered() after successful placement.
  */
-export function getNoteNudgeText(db: Database, sessionId: string): string | null {
+export function peekNoteNudgeText(db: Database, sessionId: string): string | null {
     const state = getState(sessionId);
 
     if (!state.triggerPending) return null;
 
     // Check if there are actually notes to remind about
     const notes = getSessionNotes(db, sessionId);
-    if (notes.length === 0) return null;
+    if (notes.length === 0) {
+        sessionLog(sessionId, "note-nudge: triggerPending but no notes found, skipping");
+        return null;
+    }
 
-    // Deliver the nudge
-    state.triggerPending = false;
-    state.nudgeDelivered = true;
-
+    sessionLog(sessionId, `note-nudge: delivering nudge for ${notes.length} notes`);
     const plural = notes.length === 1 ? "note" : "notes";
     return `You have ${notes.length} deferred ${plural}. Review with ctx_note read — some may be actionable now.`;
+}
+
+/**
+ * Mark the note nudge as delivered after successful placement.
+ * Only call after appendReminderToLatestUserMessage returns a truthy anchor.
+ */
+export function markNoteNudgeDelivered(sessionId: string): void {
+    const state = getState(sessionId);
+    state.triggerPending = false;
+    state.nudgeDelivered = true;
+    sessionLog(sessionId, "note-nudge: marked delivered");
+}
+
+/**
+ * Legacy wrapper — peek + mark in one call.
+ * Kept for existing tests; prefer peekNoteNudgeText + markNoteNudgeDelivered in production.
+ */
+export function getNoteNudgeText(db: Database, sessionId: string): string | null {
+    const text = peekNoteNudgeText(db, sessionId);
+    if (text) markNoteNudgeDelivered(sessionId);
+    return text;
 }
 
 /**
