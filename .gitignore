@@ -26,3 +26,6 @@ tmp/
 local-ignore/
 .planning/
 
+# Keep only the final animation; iteration folders stay local
+docs/animation[0-9]*/
+
