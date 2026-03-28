@@ -153,8 +153,11 @@ export function createTransform(deps: TransformDeps) {
             messageTagNumbers = result.messageTagNumbers;
             batch = result.batch;
             hasRecentReduceCall = result.hasRecentReduceCall;
+            const hadPriorCommitState = deps.commitSeenLastPass?.has(sessionId) ?? false;
             const sawCommitLastPass = deps.commitSeenLastPass?.get(sessionId) ?? false;
-            if (result.hasRecentCommit && !sawCommitLastPass) {
+            // Only trigger on NEW commits — not on first pass after restart where
+            // we have no baseline. First pass establishes the baseline silently.
+            if (hadPriorCommitState && result.hasRecentCommit && !sawCommitLastPass) {
                 onNoteTrigger(sessionId, "commit_detected");
             }
             deps.commitSeenLastPass?.set(sessionId, result.hasRecentCommit);
