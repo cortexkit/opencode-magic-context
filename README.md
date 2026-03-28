@@ -32,10 +32,13 @@
 Run the interactive setup wizard — it detects your models, configures everything, and handles compatibility:
 
 ```bash
-# One-liner install
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/cortexkit/opencode-magic-context/master/scripts/install.sh | bash
 
-# Or run directly with bunx/npx
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cortexkit/opencode-magic-context/master/scripts/install.ps1 | iex
+
+# Or run directly (any OS)
 bunx @cortexkit/opencode-magic-context setup
 npx @cortexkit/opencode-magic-context setup
 ```
