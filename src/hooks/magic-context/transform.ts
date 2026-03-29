@@ -158,7 +158,7 @@ export function createTransform(deps: TransformDeps) {
             // Only trigger on NEW commits — not on first pass after restart where
             // we have no baseline. First pass establishes the baseline silently.
             if (hadPriorCommitState && result.hasRecentCommit && !sawCommitLastPass) {
-                onNoteTrigger(sessionId, "commit_detected");
+                onNoteTrigger(db, sessionId, "commit_detected");
             }
             deps.commitSeenLastPass?.set(sessionId, result.hasRecentCommit);
             logTransformTiming(sessionId, "tagMessages", t0);

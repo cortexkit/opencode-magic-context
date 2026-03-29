@@ -14,35 +14,23 @@
  */
 
 import type { Database } from "bun:sqlite";
+import {
+    clearPersistedNoteNudge,
+    getPersistedNoteNudge,
+    setPersistedDeliveredNoteNudge,
+    setPersistedNoteNudgeTrigger,
+    setPersistedNoteNudgeTriggerMessageId,
+} from "../../features/magic-context/storage-meta-persisted";
 import { getSessionNotes } from "../../features/magic-context/storage-notes";
 import { sessionLog } from "../../shared/logger";
 
 export type NoteNudgeTrigger = "historian_complete" | "commit_detected" | "todos_complete";
 
-interface NoteNudgeState {
-    /** Whether a nudge has been delivered and not yet followed by a new trigger */
-    nudgeDelivered: boolean;
-    /** Whether a new trigger has fired since last delivery — ready to nudge again */
-    triggerPending: boolean;
-}
-
-const stateBySession = new Map<string, NoteNudgeState>();
-
-function getState(sessionId: string): NoteNudgeState {
-    let state = stateBySession.get(sessionId);
-    if (!state) {
-        state = { nudgeDelivered: false, triggerPending: false };
-        stateBySession.set(sessionId, state);
-    }
-    return state;
-}
-
 /**
  * Signal that a trigger event occurred. Call from hook layer when any of the 3 triggers fire.
  */
-export function onNoteTrigger(sessionId: string, trigger: NoteNudgeTrigger): void {
-    const state = getState(sessionId);
-    state.triggerPending = true;
+export function onNoteTrigger(db: Database, sessionId: string, trigger: NoteNudgeTrigger): void {
+    setPersistedNoteNudgeTrigger(db, sessionId);
     sessionLog(sessionId, `note-nudge: trigger fired (${trigger}), triggerPending=true`);
 }
 
@@ -50,11 +38,42 @@ export function onNoteTrigger(sessionId: string, trigger: NoteNudgeTrigger): voi
  * Peek at whether a note nudge should be injected during this transform pass.
  * Returns the nudge text if yes, null if no.
  * Does NOT clear triggerPending — call markNoteNudgeDelivered() after successful placement.
+ *
+ * @param currentUserMessageId - The latest user message ID in this transform pass.
+ *   If it matches the trigger-time message, delivery is deferred to avoid busting
+ *   the Anthropic prompt-cache prefix (the trigger fired during the agent's turn,
+ *   so injecting into the current user message would mutate cached content).
  */
-export function peekNoteNudgeText(db: Database, sessionId: string): string | null {
-    const state = getState(sessionId);
+export function peekNoteNudgeText(
+    db: Database,
+    sessionId: string,
+    currentUserMessageId?: string | null,
+): string | null {
+    const state = getPersistedNoteNudge(db, sessionId);
 
     if (!state.triggerPending) return null;
+
+    // On first peek after trigger, record the current user message as the
+    // trigger-time message. This is filled here (not in onNoteTrigger) because
+    // hook callers like tool.execute.after don't have access to the message array.
+    if (!state.triggerMessageId && currentUserMessageId) {
+        setPersistedNoteNudgeTriggerMessageId(db, sessionId, currentUserMessageId);
+        state.triggerMessageId = currentUserMessageId;
+    }
+
+    // Defer delivery until a NEW user message arrives after the trigger.
+    // Injecting into the trigger-time message would bust the cached prefix.
+    if (
+        state.triggerMessageId &&
+        currentUserMessageId &&
+        state.triggerMessageId === currentUserMessageId
+    ) {
+        sessionLog(
+            sessionId,
+            `note-nudge: deferring — current user message ${currentUserMessageId} is same as trigger-time message`,
+        );
+        return null;
+    }
 
     // Check if there are actually notes to remind about
     const notes = getSessionNotes(db, sessionId);
@@ -70,28 +89,51 @@ export function peekNoteNudgeText(db: Database, sessionId: string): string | nul
 
 /**
  * Mark the note nudge as delivered after successful placement.
- * Only call after appendReminderToLatestUserMessage returns a truthy anchor.
+ * Only call after appendReminderToLatestUserMessage returns an anchor (or null if no user message exists).
  */
-export function markNoteNudgeDelivered(sessionId: string): void {
-    const state = getState(sessionId);
-    state.triggerPending = false;
-    state.nudgeDelivered = true;
-    sessionLog(sessionId, "note-nudge: marked delivered");
+export function markNoteNudgeDelivered(
+    db: Database,
+    sessionId: string,
+    text: string,
+    messageId: string | null,
+): void {
+    setPersistedDeliveredNoteNudge(db, sessionId, messageId ? text : "", messageId ?? "");
+    sessionLog(
+        sessionId,
+        messageId
+            ? `note-nudge: marked delivered, sticky anchor=${messageId}`
+            : "note-nudge: marked delivered without anchor",
+    );
+}
+
+/**
+ * Get sticky note nudge for replay on subsequent transform passes.
+ * Returns { text, messageId } if a delivered nudge needs re-injection, null otherwise.
+ */
+export function getStickyNoteNudge(
+    db: Database,
+    sessionId: string,
+): { text: string; messageId: string } | null {
+    const state = getPersistedNoteNudge(db, sessionId);
+    if (!state.stickyText || !state.stickyMessageId) return null;
+    return { text: state.stickyText, messageId: state.stickyMessageId };
 }
 
 /**
  * Legacy wrapper — peek + mark in one call.
- * Kept for existing tests; prefer peekNoteNudgeText + markNoteNudgeDelivered in production.
+ * Kept for tests; prefer peekNoteNudgeText + markNoteNudgeDelivered in production.
  */
 export function getNoteNudgeText(db: Database, sessionId: string): string | null {
     const text = peekNoteNudgeText(db, sessionId);
-    if (text) markNoteNudgeDelivered(sessionId);
+    if (text) {
+        markNoteNudgeDelivered(db, sessionId, text, null);
+    }
     return text;
 }
 
 /**
- * Call when session is deleted to clean up in-memory state.
+ * Call when session is deleted or notes are read to clear persisted state.
  */
-export function clearNoteNudgeState(sessionId: string): void {
-    stateBySession.delete(sessionId);
+export function clearNoteNudgeState(db: Database, sessionId: string): void {
+    clearPersistedNoteNudge(db, sessionId);
 }

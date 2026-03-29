@@ -172,6 +172,10 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
       nudge_anchor_text TEXT DEFAULT '',
       sticky_turn_reminder_text TEXT DEFAULT '',
       sticky_turn_reminder_message_id TEXT DEFAULT '',
+      note_nudge_trigger_pending INTEGER DEFAULT 0,
+      note_nudge_trigger_message_id TEXT DEFAULT '',
+      note_nudge_sticky_text TEXT DEFAULT '',
+      note_nudge_sticky_message_id TEXT DEFAULT '',
       is_subagent INTEGER DEFAULT 0,
       last_context_percentage REAL DEFAULT 0,
       last_input_tokens INTEGER DEFAULT 0,
@@ -228,6 +232,10 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
     ensureColumn(db, "session_meta", "nudge_anchor_text", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "sticky_turn_reminder_text", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "sticky_turn_reminder_message_id", "TEXT DEFAULT ''");
+    ensureColumn(db, "session_meta", "note_nudge_trigger_pending", "INTEGER DEFAULT 0");
+    ensureColumn(db, "session_meta", "note_nudge_trigger_message_id", "TEXT DEFAULT ''");
+    ensureColumn(db, "session_meta", "note_nudge_sticky_text", "TEXT DEFAULT ''");
+    ensureColumn(db, "session_meta", "note_nudge_sticky_message_id", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "times_execute_threshold_reached", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "compartment_in_progress", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "system_prompt_hash", "TEXT DEFAULT ''");

@@ -331,6 +331,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         },
         "command.execute.before": createCommandExecuteBeforeHook(commandHandler),
         "tool.execute.after": createToolExecuteAfterHook({
+            db,
             recentReduceBySession,
             toolUsageSinceUserTurn,
         }),

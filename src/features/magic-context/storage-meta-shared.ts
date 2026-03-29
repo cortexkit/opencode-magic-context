@@ -76,6 +76,8 @@ export function getDefaultSessionMeta(sessionId: string): SessionMeta {
 
 export function ensureSessionMetaRow(db: Database, sessionId: string): void {
     const defaults = getDefaultSessionMeta(sessionId);
+    // Note-nudge persistence columns rely on session_meta defaults and are updated
+    // through storage-meta-persisted helpers, not SessionMeta writes.
     db.prepare(
         "INSERT OR IGNORE INTO session_meta (session_id, last_response_time, cache_ttl, counter, last_nudge_tokens, last_nudge_band, last_transform_error, is_subagent, last_context_percentage, last_input_tokens, times_execute_threshold_reached, compartment_in_progress, system_prompt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ).run(

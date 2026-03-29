@@ -18,9 +18,23 @@ interface PersistedStickyTurnReminderRow {
     sticky_turn_reminder_message_id: string;
 }
 
+interface PersistedNoteNudgeRow {
+    note_nudge_trigger_pending: number;
+    note_nudge_trigger_message_id: string;
+    note_nudge_sticky_text: string;
+    note_nudge_sticky_message_id: string;
+}
+
 export interface PersistedStickyTurnReminder {
     text: string;
     messageId: string | null;
+}
+
+export interface PersistedNoteNudge {
+    triggerPending: boolean;
+    triggerMessageId: string | null;
+    stickyText: string | null;
+    stickyMessageId: string | null;
 }
 
 function isPersistedUsageRow(row: unknown): row is PersistedUsageRow {
@@ -46,6 +60,26 @@ function isPersistedStickyTurnReminderRow(row: unknown): row is PersistedStickyT
         typeof r.sticky_turn_reminder_text === "string" &&
         typeof r.sticky_turn_reminder_message_id === "string"
     );
+}
+
+function isPersistedNoteNudgeRow(row: unknown): row is PersistedNoteNudgeRow {
+    if (row === null || typeof row !== "object") return false;
+    const r = row as Record<string, unknown>;
+    return (
+        typeof r.note_nudge_trigger_pending === "number" &&
+        typeof r.note_nudge_trigger_message_id === "string" &&
+        typeof r.note_nudge_sticky_text === "string" &&
+        typeof r.note_nudge_sticky_message_id === "string"
+    );
+}
+
+function getDefaultPersistedNoteNudge(): PersistedNoteNudge {
+    return {
+        triggerPending: false,
+        triggerMessageId: null,
+        stickyText: null,
+        stickyMessageId: null,
+    };
 }
 
 export function loadPersistedUsage(
@@ -162,5 +196,76 @@ export function setPersistedStickyTurnReminder(
 export function clearPersistedStickyTurnReminder(db: Database, sessionId: string): void {
     db.prepare(
         "UPDATE session_meta SET sticky_turn_reminder_text = '', sticky_turn_reminder_message_id = '' WHERE session_id = ?",
+    ).run(sessionId);
+}
+
+export function getPersistedNoteNudge(db: Database, sessionId: string): PersistedNoteNudge {
+    const result = db
+        .prepare(
+            "SELECT note_nudge_trigger_pending, note_nudge_trigger_message_id, note_nudge_sticky_text, note_nudge_sticky_message_id FROM session_meta WHERE session_id = ?",
+        )
+        .get(sessionId);
+
+    if (!isPersistedNoteNudgeRow(result)) {
+        return getDefaultPersistedNoteNudge();
+    }
+
+    return {
+        triggerPending: result.note_nudge_trigger_pending === 1,
+        triggerMessageId:
+            result.note_nudge_trigger_message_id.length > 0
+                ? result.note_nudge_trigger_message_id
+                : null,
+        stickyText: result.note_nudge_sticky_text.length > 0 ? result.note_nudge_sticky_text : null,
+        stickyMessageId:
+            result.note_nudge_sticky_message_id.length > 0
+                ? result.note_nudge_sticky_message_id
+                : null,
+    };
+}
+
+export function setPersistedNoteNudgeTrigger(
+    db: Database,
+    sessionId: string,
+    triggerMessageId = "",
+): void {
+    db.transaction(() => {
+        ensureSessionMetaRow(db, sessionId);
+        db.prepare(
+            "UPDATE session_meta SET note_nudge_trigger_pending = 1, note_nudge_trigger_message_id = ?, note_nudge_sticky_text = '', note_nudge_sticky_message_id = '' WHERE session_id = ?",
+        ).run(triggerMessageId, sessionId);
+    })();
+}
+
+export function setPersistedNoteNudgeTriggerMessageId(
+    db: Database,
+    sessionId: string,
+    triggerMessageId: string,
+): void {
+    db.transaction(() => {
+        ensureSessionMetaRow(db, sessionId);
+        db.prepare(
+            "UPDATE session_meta SET note_nudge_trigger_message_id = ? WHERE session_id = ?",
+        ).run(triggerMessageId, sessionId);
+    })();
+}
+
+export function setPersistedDeliveredNoteNudge(
+    db: Database,
+    sessionId: string,
+    text: string,
+    messageId = "",
+): void {
+    db.transaction(() => {
+        ensureSessionMetaRow(db, sessionId);
+        db.prepare(
+            "UPDATE session_meta SET note_nudge_trigger_pending = 0, note_nudge_trigger_message_id = '', note_nudge_sticky_text = ?, note_nudge_sticky_message_id = ? WHERE session_id = ?",
+        ).run(text, messageId, sessionId);
+    })();
+}
+
+export function clearPersistedNoteNudge(db: Database, sessionId: string): void {
+    db.prepare(
+        "UPDATE session_meta SET note_nudge_trigger_pending = 0, note_nudge_trigger_message_id = '', note_nudge_sticky_text = '', note_nudge_sticky_message_id = '' WHERE session_id = ?",
     ).run(sessionId);
 }

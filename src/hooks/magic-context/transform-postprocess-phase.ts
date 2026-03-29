@@ -18,7 +18,7 @@ import {
     type PreparedCompartmentInjection,
     renderCompartmentInjection,
 } from "./inject-compartments";
-import { markNoteNudgeDelivered, peekNoteNudgeText } from "./note-nudger";
+import { getStickyNoteNudge, markNoteNudgeDelivered, peekNoteNudgeText } from "./note-nudger";
 import { reinjectNudgeAtAnchor } from "./nudge-injection";
 import type { NudgePlacementStore } from "./nudge-placement-store";
 import type { ContextNudge } from "./nudger";
@@ -383,13 +383,28 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
 
     // Note nudges run outside fullFeatureMode — they should work in all sessions
     // including subagent sessions where fullFeatureMode is false.
-    const deferredNoteText = peekNoteNudgeText(args.db, args.sessionId);
+    const stickyNoteNudge = getStickyNoteNudge(args.db, args.sessionId);
+    if (stickyNoteNudge) {
+        const reinjected = appendReminderToUserMessageById(
+            args.messages,
+            stickyNoteNudge.messageId,
+            stickyNoteNudge.text,
+        );
+        if (!reinjected) {
+            sessionLog(
+                args.sessionId,
+                `preserving sticky note nudge anchor to avoid cache bust: messageId=${stickyNoteNudge.messageId}`,
+            );
+        }
+    }
+
+    const deferredNoteText = peekNoteNudgeText(args.db, args.sessionId, args.currentTurnId);
     if (deferredNoteText) {
         const noteInstruction = `\n\n<instruction name="deferred_notes">${deferredNoteText}</instruction>`;
-        appendReminderToLatestUserMessage(args.messages, noteInstruction);
+        const anchoredMessageId = appendReminderToLatestUserMessage(args.messages, noteInstruction);
         // Always mark delivered once text is generated — the trigger is consumed.
         // If no user message exists, the nudge is lost for this cycle, but
         // triggerPending must still clear to prevent firing on every subsequent pass.
-        markNoteNudgeDelivered(args.sessionId);
+        markNoteNudgeDelivered(args.db, args.sessionId, noteInstruction, anchoredMessageId);
     }
 }

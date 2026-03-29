@@ -14,18 +14,13 @@ function getConfigDir(): string {
     const envDir = process.env.OPENCODE_CONFIG_DIR?.trim();
     if (envDir) return envDir;
 
-    switch (process.platform) {
-        case "win32": {
-            const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
-            return join(appData, "opencode");
-        }
-        case "darwin":
-        case "linux":
-        default: {
-            const xdgConfig = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-            return join(xdgConfig, "opencode");
-        }
+    if (process.platform === "win32") {
+        const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
+        return join(appData, "opencode");
     }
+
+    const xdgConfig = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+    return join(xdgConfig, "opencode");
 }
 
 function findOmoConfig(configDir: string): string | null {

@@ -136,7 +136,7 @@ export function createEventHook(args: {
             args.flushedSessions.delete(sessionId);
             args.lastHeuristicsTurnId.delete(sessionId);
             args.commitSeenLastPass?.delete(sessionId);
-            clearNoteNudgeState(sessionId);
+            clearNoteNudgeState(args.db, sessionId);
         }
 
         const entry = args.contextUsageMap.get(sessionId);
@@ -220,6 +220,7 @@ export function createCommandExecuteBeforeHook(commandHandler: {
 }
 
 export function createToolExecuteAfterHook(args: {
+    db: Parameters<typeof getOrCreateSessionMeta>[0];
     recentReduceBySession: RecentReduceBySession;
     toolUsageSinceUserTurn: ToolUsageSinceUserTurn;
 }) {
@@ -234,10 +235,10 @@ export function createToolExecuteAfterHook(args: {
             args.recentReduceBySession.set(typedInput.sessionID, Date.now());
         }
         if (typedInput.tool === "todowrite") {
-            onNoteTrigger(typedInput.sessionID, "todos_complete");
+            onNoteTrigger(args.db, typedInput.sessionID, "todos_complete");
         }
         if (typedInput.tool === "ctx_note") {
-            clearNoteNudgeState(typedInput.sessionID);
+            clearNoteNudgeState(args.db, typedInput.sessionID);
         }
         args.toolUsageSinceUserTurn.set(typedInput.sessionID, turnUsage + 1);
     };

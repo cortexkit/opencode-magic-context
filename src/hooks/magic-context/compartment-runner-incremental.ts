@@ -165,7 +165,7 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
 
         updateSessionMeta(db, sessionId, { compartmentInProgress: false });
         completedSuccessfully = true;
-        onNoteTrigger(sessionId, "historian_complete");
+        onNoteTrigger(db, sessionId, "historian_complete");
     } catch (error: unknown) {
         // Historian runs are fail-closed because they update durable compartment state.
         const msg = getErrorMessage(error);
