@@ -161,29 +161,30 @@ function ConfigForm(props: {
   };
 
   // Range slider helpers
-  const getRangeConfig = (fieldKey: string) => {
+  const getRangeConfig = (fieldKey: string): { min: number; max: number; step: number; suffix: string; defaultValue: number } => {
     switch (fieldKey) {
       case "execute_threshold_percentage":
-        return { min: 35, max: 80, step: 1, suffix: "%" };
+        return { min: 35, max: 80, step: 1, suffix: "%", defaultValue: 65 };
       case "history_budget_percentage":
-        return { min: 0.05, max: 0.5, step: 0.01, suffix: "" };
+        return { min: 0.05, max: 0.5, step: 0.01, suffix: "", defaultValue: 0.15 };
       case "nudge_interval_tokens":
-        return { min: 1000, max: 50000, step: 1000, suffix: " tokens" };
+        return { min: 1000, max: 50000, step: 1000, suffix: " tokens", defaultValue: 10000 };
       case "protected_tags":
-        return { min: 0, max: 50, step: 1, suffix: "" };
+        return { min: 1, max: 20, step: 1, suffix: "", defaultValue: 20 };
       case "auto_drop_tool_age":
+        return { min: 10, max: 200, step: 5, suffix: "", defaultValue: 100 };
       case "clear_reasoning_age":
-        return { min: 1, max: 100, step: 1, suffix: "" };
+        return { min: 10, max: 200, step: 5, suffix: "", defaultValue: 50 };
       case "iteration_nudge_threshold":
-        return { min: 1, max: 20, step: 1, suffix: "" };
+        return { min: 5, max: 30, step: 1, suffix: "", defaultValue: 15 };
       case "compartment_token_budget":
-        return { min: 5000, max: 100000, step: 5000, suffix: " tokens" };
+        return { min: 10000, max: 100000, step: 5000, suffix: " tokens", defaultValue: 20000 };
       case "historian_timeout_ms":
-        return { min: 5000, max: 60000, step: 5000, suffix: " ms" };
+        return { min: 60000, max: 600000, step: 30000, suffix: " ms", defaultValue: 300000 };
       case "memory.injection_budget_tokens":
-        return { min: 500, max: 20000, step: 500, suffix: " tokens" };
+        return { min: 500, max: 20000, step: 500, suffix: " tokens", defaultValue: 4000 };
       default:
-        return { min: 0, max: 100, step: 1, suffix: "" };
+        return { min: 0, max: 100, step: 1, suffix: "", defaultValue: 0 };
     }
   };
 
@@ -278,7 +279,7 @@ function ConfigForm(props: {
                                   onChange={(e) => handleFieldChange(field.key, e.currentTarget.checked)}
                                 />
                                 <span class="toggle-slider" />
-                                <span class="toggle-label">{value() ? "Enabled" : "Disabled"}</span>
+                                <span class="toggle-label">{(value() as boolean ?? true) ? "Enabled" : "Disabled"}</span>
                               </label>
                             ) : field.type === "select" ? (
                               <select
@@ -298,11 +299,11 @@ function ConfigForm(props: {
                                   min={getRangeConfig(field.key).min}
                                   max={getRangeConfig(field.key).max}
                                   step={getRangeConfig(field.key).step}
-                                  value={scalarValue() != null ? Number(scalarValue()) : getRangeConfig(field.key).min}
+                                  value={scalarValue() != null ? Number(scalarValue()) : getRangeConfig(field.key).defaultValue}
                                   onInput={(e) => handleFieldChange(field.key, Number(e.currentTarget.value))}
                                 />
                                 <span class="range-slider-value">
-                                  {scalarValue() != null ? Number(scalarValue()) : getRangeConfig(field.key).min}{getRangeConfig(field.key).suffix}
+                                  {scalarValue() != null ? Number(scalarValue()) : getRangeConfig(field.key).defaultValue}{getRangeConfig(field.key).suffix}
                                 </span>
                               </div>
                             ) : field.type === "number" ? (
