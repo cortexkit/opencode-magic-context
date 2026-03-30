@@ -123,6 +123,10 @@ function ConfigForm(props: {
   // Reset form data when content prop changes
   const parsed = createMemo(() => parseJsonc(props.content));
 
+  const hasChanges = createMemo(() => {
+    return JSON.stringify(formData()) !== JSON.stringify(parsed());
+  });
+
   const sections = createMemo(() => {
     const groups: Record<string, FieldDef[]> = {};
     for (const field of FIELD_DEFS) {
@@ -251,7 +255,7 @@ function ConfigForm(props: {
               {props.saveStatus}
             </span>
           </Show>
-          <button class="btn primary sm" onClick={handleFormSave}>Save Changes</button>
+          <button class="btn primary sm" disabled={!hasChanges()} onClick={handleFormSave} style={{ opacity: hasChanges() ? 1 : 0.4, cursor: hasChanges() ? "pointer" : "default" }}>Save Changes</button>
         </div>
       </div>
 
