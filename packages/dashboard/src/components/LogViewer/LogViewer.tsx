@@ -120,6 +120,7 @@ export default function LogViewer() {
           value={sessionFilter()}
           onChange={setSessionFilter}
           placeholder="All sessions"
+          align="left"
           options={[
             { value: "", label: "All sessions" },
             ...uniqueSessions().map((sid) => ({ value: sid, label: truncate(sid, 16) })),

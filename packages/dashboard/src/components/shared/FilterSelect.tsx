@@ -12,6 +12,8 @@ interface FilterSelectProps {
   placeholder?: string;
   /** Compact inline style for table cells etc. */
   compact?: boolean;
+  /** Dropdown alignment: "left" or "right" (default: "right") */
+  align?: "left" | "right";
 }
 
 export default function FilterSelect(props: FilterSelectProps) {
@@ -54,7 +56,7 @@ export default function FilterSelect(props: FilterSelectProps) {
       </button>
 
       <Show when={open()}>
-        <div class="fsel-dropdown">
+        <div class="fsel-dropdown" style={{ [props.align === "left" ? "left" : "right"]: "0", [props.align === "left" ? "right" : "left"]: "auto" }}>
           <For each={props.options}>
             {(opt) => (
               <button

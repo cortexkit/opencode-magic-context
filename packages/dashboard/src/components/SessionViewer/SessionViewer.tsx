@@ -123,6 +123,7 @@ export default function SessionViewer() {
             value={projectFilter()}
             onChange={setProjectFilter}
             placeholder="All projects"
+            align="left"
             options={[
               { value: "", label: "All projects" },
               ...(projects() ?? []).map((p) => ({ value: p.identity, label: p.label })),
