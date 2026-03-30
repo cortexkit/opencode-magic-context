@@ -116,8 +116,8 @@ describe("MagicContextConfigSchema", () => {
     });
 
     describe("validation", () => {
-        it("rejects protected_tags greater than 20", () => {
-            expect(() => MagicContextConfigSchema.parse({ protected_tags: 21 })).toThrow();
+        it("rejects protected_tags greater than 100", () => {
+            expect(() => MagicContextConfigSchema.parse({ protected_tags: 101 })).toThrow();
         });
 
         it("rejects protected_tags less than 1", () => {

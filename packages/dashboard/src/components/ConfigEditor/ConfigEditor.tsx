@@ -170,7 +170,7 @@ function ConfigForm(props: {
       case "nudge_interval_tokens":
         return { min: 1000, max: 50000, step: 1000, suffix: " tokens", defaultValue: 10000 };
       case "protected_tags":
-        return { min: 1, max: 20, step: 1, suffix: "", defaultValue: 20 };
+        return { min: 1, max: 100, step: 1, suffix: "", defaultValue: 20 };
       case "auto_drop_tool_age":
         return { min: 10, max: 200, step: 5, suffix: "", defaultValue: 100 };
       case "clear_reasoning_age":
