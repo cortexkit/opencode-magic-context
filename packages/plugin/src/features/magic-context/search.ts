@@ -15,6 +15,7 @@ import { embedText, isEmbeddingEnabled } from "./memory/embedding";
 import { sanitizeFtsQuery } from "./memory/storage-memory-fts";
 import { ensureMessagesIndexed } from "./message-index";
 import { getSessionFacts, type SessionFact } from "./storage";
+import { log } from "../../shared/logger";
 
 type PreparedStatement = ReturnType<Database["prepare"]>;
 
@@ -212,7 +213,8 @@ function getFtsMatches(args: {
 }): Memory[] {
     try {
         return searchMemoriesFTS(args.db, args.projectPath, args.query, args.limit);
-    } catch {
+    } catch (error) {
+        log(`[search] FTS query failed for "${args.query}": ${error instanceof Error ? error.message : String(error)}`);
         return [];
     }
 }

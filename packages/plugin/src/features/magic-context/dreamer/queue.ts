@@ -34,12 +34,19 @@ export function enqueueDream(
 ): DreamQueueEntry | null {
     const now = Date.now();
     return db.transaction(() => {
+        // Clean stale started entries before checking — prevents post-crash permanent "already queued"
+        const staleThresholdMs = 10 * 60 * 1000; // 10 minutes
+        db.run(
+            "DELETE FROM dream_queue WHERE project_path = ? AND started_at IS NOT NULL AND started_at < ?",
+            [projectIdentity, now - staleThresholdMs],
+        );
+
         const existing = db
             .query<{ id: number }, [string]>("SELECT id FROM dream_queue WHERE project_path = ?")
             .get(projectIdentity);
 
         if (existing) {
-            return null; // already queued
+            return null; // already queued (fresh entry)
         }
 
         const result = db

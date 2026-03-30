@@ -94,16 +94,16 @@ export function peekNoteNudgeText(
     // Suppress if we delivered a nudge recently (within 15 minutes).
     // Prevents the same notes from being re-surfaced on every commit/todo boundary
     // in quick succession during active work.
-    if (state.stickyText && state.stickyMessageId) {
-        const deliveredAt = getPersistedNoteNudgeDeliveredAt(db, sessionId);
-        if (deliveredAt > 0 && Date.now() - deliveredAt < NOTE_NUDGE_COOLDOWN_MS) {
-            sessionLog(
-                sessionId,
-                `note-nudge: suppressing — last delivered ${Math.round((Date.now() - deliveredAt) / 1000)}s ago (cooldown ${NOTE_NUDGE_COOLDOWN_MS / 60000}m)`,
-            );
-            clearPersistedNoteNudge(db, sessionId);
-            return null;
-        }
+    // Check unconditionally — a new trigger clears sticky fields, so gating on
+    // stickyText presence would let triggers bypass the cooldown window.
+    const deliveredAt = getPersistedNoteNudgeDeliveredAt(db, sessionId);
+    if (deliveredAt > 0 && Date.now() - deliveredAt < NOTE_NUDGE_COOLDOWN_MS) {
+        sessionLog(
+            sessionId,
+            `note-nudge: suppressing — last delivered ${Math.round((Date.now() - deliveredAt) / 1000)}s ago (cooldown ${NOTE_NUDGE_COOLDOWN_MS / 60000}m)`,
+        );
+        clearPersistedNoteNudge(db, sessionId);
+        return null;
     }
 
     // Check if there are actually notes to remind about
@@ -177,4 +177,5 @@ export function getNoteNudgeText(db: Database, sessionId: string): string | null
  */
 export function clearNoteNudgeState(db: Database, sessionId: string): void {
     clearPersistedNoteNudge(db, sessionId);
+    lastDeliveredAt.delete(sessionId); // also reset in-memory cooldown
 }

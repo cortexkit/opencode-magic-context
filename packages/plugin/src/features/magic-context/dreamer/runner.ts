@@ -271,7 +271,9 @@ export async function runDream(args: {
     result.finishedAt = Date.now();
     // Only update dream timestamps when at least one task succeeded — failed runs
     // should not block re-scheduling for the project.
-    const hasSuccessfulTask = result.tasks.some((t) => !t.error);
+    // Only count configured dream tasks for success — smart-note evaluation is supplementary
+    // and should not mask failures of real tasks like consolidate/verify/archive-stale
+    const hasSuccessfulTask = result.tasks.some((t) => !t.error && t.name !== "smart-notes");
     if (hasSuccessfulTask) {
         setDreamState(args.db, `last_dream_at:${args.projectIdentity}`, String(result.finishedAt));
         setDreamState(args.db, "last_dream_at", String(result.finishedAt));
