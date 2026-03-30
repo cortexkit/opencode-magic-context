@@ -161,7 +161,15 @@ pub fn extract_cache_events(entries: &[LogEntry]) -> Vec<CacheEvent> {
             // Determine severity and cause based on real hit ratio
             let (severity, cause) = if read == 0 && write > 0 {
                 let cause = detect_bust_cause(entries, i);
-                ("full_bust".to_string(), Some(cause))
+                // First message and provider eviction are not real busts
+                let sev = if cause.starts_with("First message") {
+                    "info"
+                } else if cause.starts_with("Provider-side") {
+                    "warning"
+                } else {
+                    "full_bust"
+                };
+                (sev.to_string(), Some(cause))
             } else if ratio < 0.5 {
                 let cause = detect_bust_cause(entries, i);
                 ("bust".to_string(), Some(cause))
@@ -253,13 +261,48 @@ pub fn aggregate_session_cache_stats(events: &[CacheEvent], limit: usize) -> Vec
 }
 
 fn detect_bust_cause(entries: &[LogEntry], event_idx: usize) -> String {
+    let event = &entries[event_idx];
+
     // Look at surrounding log entries for context
-    let window_start = if event_idx > 5 { event_idx - 5 } else { 0 };
+    let window_start = if event_idx > 10 { event_idx - 10 } else { 0 };
     let window_end = std::cmp::min(event_idx + 3, entries.len());
 
     let mut causes = Vec::new();
 
+    // Check if this is the first cache event for this session
+    let is_first_session_event = !entries[..event_idx].iter().any(|e| {
+        e.session_id == event.session_id
+            && e.cache_read.is_some()
+            && (e.cache_read.unwrap_or(0) > 0 || e.cache_write.unwrap_or(0) > 0)
+    });
+
+    if is_first_session_event {
+        return "First message (new session)".to_string();
+    }
+
+    // Check if the transform was a defer pass (no plugin-side mutations)
+    let is_defer_pass = entries[window_start..window_end].iter().any(|e| {
+        e.session_id == event.session_id && e.message.contains("decision=defer")
+    });
+
+    // If cache.read=0 on a defer pass, it's provider-side eviction
+    if is_defer_pass && event.cache_read == Some(0) && event.cache_write.unwrap_or(0) > 0 {
+        let has_plugin_mutation = entries[window_start..window_end].iter().any(|e| {
+            e.session_id == event.session_id
+                && (e.message.contains("Execute pass")
+                    || e.message.contains("triggering flush")
+                    || e.message.contains("system prompt hash changed")
+                    || e.message.contains("variant change"))
+        });
+        if !has_plugin_mutation {
+            return "Provider-side cache eviction".to_string();
+        }
+    }
+
     for entry in &entries[window_start..window_end] {
+        if entry.session_id != event.session_id {
+            continue;
+        }
         let msg = &entry.message;
         if msg.contains("Execute pass") || (msg.contains("applied") && msg.contains("ops")) {
             causes.push("Execute pass".to_string());

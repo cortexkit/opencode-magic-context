@@ -27,6 +27,20 @@ import { sessionLog } from "../../shared/logger";
 
 export type NoteNudgeTrigger = "historian_complete" | "commit_detected" | "todos_complete";
 
+const NOTE_NUDGE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
+
+// In-memory delivery timestamp per session. Doesn't need to survive restart —
+// if the app restarts, cooldown resets, which is acceptable.
+const lastDeliveredAt = new Map<string, number>();
+
+function getPersistedNoteNudgeDeliveredAt(_db: unknown, sessionId: string): number {
+    return lastDeliveredAt.get(sessionId) ?? 0;
+}
+
+function recordNoteNudgeDeliveryTime(sessionId: string): void {
+    lastDeliveredAt.set(sessionId, Date.now());
+}
+
 /**
  * Signal that a trigger event occurred. Call from hook layer when any of the 3 triggers fire.
  */
@@ -77,12 +91,28 @@ export function peekNoteNudgeText(
         return null;
     }
 
+    // Suppress if we delivered a nudge recently (within 15 minutes).
+    // Prevents the same notes from being re-surfaced on every commit/todo boundary
+    // in quick succession during active work.
+    if (state.stickyText && state.stickyMessageId) {
+        const deliveredAt = getPersistedNoteNudgeDeliveredAt(db, sessionId);
+        if (deliveredAt > 0 && Date.now() - deliveredAt < NOTE_NUDGE_COOLDOWN_MS) {
+            sessionLog(
+                sessionId,
+                `note-nudge: suppressing — last delivered ${Math.round((Date.now() - deliveredAt) / 1000)}s ago (cooldown ${NOTE_NUDGE_COOLDOWN_MS / 60000}m)`,
+            );
+            clearPersistedNoteNudge(db, sessionId);
+            return null;
+        }
+    }
+
     // Check if there are actually notes to remind about
     const notes = getSessionNotes(db, sessionId);
     const readySmartCount = projectIdentity ? getReadySmartNotes(db, projectIdentity).length : 0;
     const totalCount = notes.length + readySmartCount;
     if (totalCount === 0) {
         sessionLog(sessionId, "note-nudge: triggerPending but no notes found, skipping");
+        clearPersistedNoteNudge(db, sessionId);
         return null;
     }
 
@@ -108,6 +138,7 @@ export function markNoteNudgeDelivered(
     messageId: string | null,
 ): void {
     setPersistedDeliveredNoteNudge(db, sessionId, messageId ? text : "", messageId ?? "");
+    recordNoteNudgeDeliveryTime(sessionId);
     sessionLog(
         sessionId,
         messageId

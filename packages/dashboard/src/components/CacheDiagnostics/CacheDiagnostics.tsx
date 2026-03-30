@@ -50,6 +50,7 @@ export default function CacheDiagnostics() {
   const severityIcon = (severity: string) => {
     switch (severity) {
       case "stable": return "🟢";
+      case "info": return "🔵";
       case "warning": return "🟡";
       case "bust": return "🔴";
       case "full_bust": return "⚫";
@@ -187,8 +188,8 @@ export default function CacheDiagnostics() {
                         <span class="mono" style={{ "font-size": "11px", color: "var(--text-secondary)" }}>
                           {event.timestamp.split("T").pop()?.split(".")[0] ?? event.timestamp}
                         </span>
-                        <span class={`pill ${event.severity === "stable" ? "green" : event.severity === "warning" ? "amber" : "red"}`}>
-                          {event.severity === "full_bust" ? "FULL BUST" : event.severity.toUpperCase()}
+                        <span class={`pill ${event.severity === "stable" ? "green" : event.severity === "info" ? "blue" : event.severity === "warning" ? "amber" : "red"}`}>
+                          {event.severity === "full_bust" ? "FULL BUST" : event.severity === "info" ? "NEW SESSION" : event.severity.toUpperCase()}
                         </span>
                         <span class="mono" style={{ "font-size": "10px", color: "var(--text-muted)" }}>
                           {resolveTitle(event.session_id)}

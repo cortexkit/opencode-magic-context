@@ -143,7 +143,7 @@ export interface CacheEvent {
   input_tokens: number;
   hit_ratio: number;
   cause: string | null;
-  severity: "stable" | "warning" | "bust" | "full_bust";
+  severity: "stable" | "info" | "warning" | "bust" | "full_bust";
 }
 
 export interface SessionCacheStats {
