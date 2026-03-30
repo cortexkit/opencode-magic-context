@@ -6,13 +6,38 @@ import PerModelField from "./PerModelField";
 
 // ── JSONC helpers ───────────────────────────────────────────
 
-// Minimal JSONC parser: strip single-line and block comments, then parse.
+// Minimal JSONC parser: strip comments while respecting string literals, then parse.
 function parseJsonc(text: string): Record<string, unknown> {
-  const stripped = text
-    .replace(/\/\/.*$/gm, "")
-    .replace(/\/\*[\s\S]*?\*\//g, "");
+  let result = "";
+  let i = 0;
+  while (i < text.length) {
+    // String literal — copy verbatim
+    if (text[i] === '"') {
+      result += '"';
+      i++;
+      while (i < text.length && text[i] !== '"') {
+        if (text[i] === '\\') { result += text[i++]; } // skip escape + next char
+        if (i < text.length) { result += text[i++]; }
+      }
+      if (i < text.length) { result += text[i++]; } // closing quote
+    }
+    // Single-line comment
+    else if (text[i] === '/' && text[i + 1] === '/') {
+      while (i < text.length && text[i] !== '\n') i++;
+    }
+    // Block comment
+    else if (text[i] === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < text.length && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i += 2; // skip */
+    }
+    // Normal character
+    else {
+      result += text[i++];
+    }
+  }
   try {
-    return JSON.parse(stripped);
+    return JSON.parse(result);
   } catch {
     return {};
   }

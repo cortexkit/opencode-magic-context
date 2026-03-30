@@ -201,14 +201,14 @@ pub struct TableCount {
 /// Uses std::hash for portability (no SHA crate in deps); the exact
 /// hash algorithm doesn't matter as long as it's consistent within
 /// the dashboard. The plugin uses its own Bun-based hash path.
+/// Match the plugin's `computeNormalizedHash`: lowercase → collapse whitespace → trim → MD5 hex.
 fn normalize_hash(content: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use md5::{Md5, Digest};
     let normalized = content.to_lowercase();
-    let normalized = normalized.trim();
-    let mut hasher = DefaultHasher::new();
-    normalized.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    // Collapse all whitespace runs into a single space (mirrors JS /\s+/g → " ")
+    let normalized: String = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let hash = Md5::digest(normalized.as_bytes());
+    format!("{:032x}", hash)
 }
 
 // ── Project resolution ────────────────────────────────────────

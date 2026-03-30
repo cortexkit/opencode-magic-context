@@ -1,4 +1,4 @@
-import { createSignal, createResource, Show, onMount, onCleanup } from "solid-js";
+import { createSignal, createResource, Show, onMount, onCleanup, ErrorBoundary } from "solid-js";
 import type { NavSection, DbHealth } from "./lib/types";
 import { getDbHealth, getAvailableModels } from "./lib/api";
 import { checkForUpdate, installAndRelaunch } from "./lib/updater";
@@ -92,24 +92,32 @@ export default function App() {
           </div>
         </Show>
 
-        <Show when={activeSection() === "memories"}>
-          <MemoryBrowser />
-        </Show>
-        <Show when={activeSection() === "sessions"}>
-          <SessionViewer />
-        </Show>
-        <Show when={activeSection() === "cache"}>
-          <CacheDiagnostics />
-        </Show>
-        <Show when={activeSection() === "dreamer"}>
-          <DreamerPanel />
-        </Show>
-        <Show when={activeSection() === "config"}>
-          <ConfigEditor models={availableModels()} />
-        </Show>
-        <Show when={activeSection() === "logs"}>
-          <LogViewer />
-        </Show>
+        <ErrorBoundary fallback={(err, reset) => (
+          <div class="error-boundary">
+            <h2>Something went wrong</h2>
+            <p>{err?.message || "An unexpected error occurred"}</p>
+            <button class="btn primary" onClick={reset}>Try Again</button>
+          </div>
+        )}>
+          <Show when={activeSection() === "memories"}>
+            <MemoryBrowser />
+          </Show>
+          <Show when={activeSection() === "sessions"}>
+            <SessionViewer />
+          </Show>
+          <Show when={activeSection() === "cache"}>
+            <CacheDiagnostics />
+          </Show>
+          <Show when={activeSection() === "dreamer"}>
+            <DreamerPanel />
+          </Show>
+          <Show when={activeSection() === "config"}>
+            <ConfigEditor models={availableModels()} />
+          </Show>
+          <Show when={activeSection() === "logs"}>
+            <LogViewer />
+          </Show>
+        </ErrorBoundary>
       </main>
 
       <StatusBar health={health()} />

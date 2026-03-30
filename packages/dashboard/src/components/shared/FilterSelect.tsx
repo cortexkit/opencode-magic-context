@@ -46,7 +46,7 @@ export default function FilterSelect(props: FilterSelectProps) {
     <div class={`fsel ${props.compact ? "fsel-compact" : ""}`} ref={containerRef}>
       <button
         class="fsel-trigger"
-        onClick={() => { setOpen(!open()); if (!open()) stopListening(); else startListening(); }}
+        onClick={() => { const wasOpen = open(); setOpen(!wasOpen); if (wasOpen) stopListening(); else startListening(); }}
         type="button"
       >
         <span class={`fsel-value ${!props.value ? "placeholder" : ""}`}>

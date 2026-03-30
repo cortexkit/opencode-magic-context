@@ -206,26 +206,56 @@ pub fn get_project_configs() -> Vec<config::ProjectConfigEntry> {
 #[tauri::command]
 pub fn save_project_config(project_path: String, content: String) -> Result<(), String> {
     let path = config::resolve_project_config_path(&project_path);
+
+    // Validate: path must be under the project directory (prevent path traversal)
+    let canonical_project = std::path::Path::new(&project_path)
+        .canonicalize()
+        .map_err(|e| format!("Invalid project path: {}", e))?;
+    let canonical_config = path
+        .parent()
+        .unwrap_or(&path)
+        .canonicalize()
+        .unwrap_or_else(|_| path.clone());
+    if !canonical_config.starts_with(&canonical_project) {
+        return Err("Config path is outside the project directory".to_string());
+    }
+
     config::write_config(&path, &content)
 }
 
 // ── Model commands ──────────────────────────────────────────
 
 #[tauri::command]
-pub fn get_available_models() -> Vec<String> {
-    match std::process::Command::new("opencode")
-        .arg("models")
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
+pub async fn get_available_models() -> Vec<String> {
+    // GUI apps on macOS don't inherit shell PATH; try common locations
+    let candidates = if cfg!(target_os = "windows") {
+        vec!["opencode".to_string()]
+    } else {
+        vec![
+            "opencode".to_string(),
+            format!("{}/.local/bin/opencode", std::env::var("HOME").unwrap_or_default()),
+            "/usr/local/bin/opencode".to_string(),
+            "/opt/homebrew/bin/opencode".to_string(),
+        ]
+    };
+
+    for bin in &candidates {
+        if let Ok(output) = tokio::process::Command::new(bin)
+            .arg("models")
+            .output()
+            .await
+        {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+            }
         }
-        _ => Vec::new(),
     }
+
+    Vec::new()
 }
 
 // ── Embedding test ──────────────────────────────────────────
@@ -246,7 +276,15 @@ pub async fn test_embedding_endpoint(
         "input": "test connection"
     });
 
-    let client = reqwest::Client::new();
+    // Validate URL scheme
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("Endpoint must start with http:// or https://".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create client: {}", e))?;
     let mut req = client.post(&url)
         .header("Content-Type", "application/json")
         .json(&body);
@@ -264,7 +302,8 @@ pub async fn test_embedding_endpoint(
                 Ok(format!("✓ Connected ({})", status))
             } else {
                 let body = resp.text().await.unwrap_or_default();
-                let preview = if body.len() > 120 { &body[..120] } else { &body };
+                // Safe string truncation (avoid panic on multi-byte chars)
+                let preview: String = body.chars().take(120).collect();
                 Err(format!("{}: {}", status, preview))
             }
         }

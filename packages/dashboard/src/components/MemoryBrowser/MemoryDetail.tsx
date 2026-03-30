@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, createEffect, Show } from "solid-js";
 import type { Memory } from "../../lib/types";
 import { formatTimestamp } from "../../lib/api";
 import FilterSelect from "../shared/FilterSelect";
@@ -15,6 +15,12 @@ export default function MemoryDetail(props: Props) {
   const [editing, setEditing] = createSignal(false);
   const [editContent, setEditContent] = createSignal(props.memory.content);
   const [confirmDelete, setConfirmDelete] = createSignal(false);
+
+  // Sync editContent when the selected memory changes
+  createEffect(() => {
+    setEditContent(props.memory.content);
+    setEditing(false);
+  });
 
   const mergedFrom = () => {
     if (!props.memory.merged_from) return null;

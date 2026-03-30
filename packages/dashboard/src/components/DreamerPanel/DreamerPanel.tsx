@@ -1,14 +1,30 @@
 import { createResource, For, Show } from "solid-js";
 import type { DreamQueueEntry, DreamStateEntry } from "../../lib/types";
-import { getDreamQueue, getDreamState, enqueueDream, formatRelativeTime, formatDateTime } from "../../lib/api";
+import { getDreamQueue, getDreamState, enqueueDream, getProjects, formatRelativeTime, formatDateTime } from "../../lib/api";
 
 export default function DreamerPanel() {
   const [queue, { refetch: refetchQueue }] = createResource(getDreamQueue);
   const [state, { refetch: refetchState }] = createResource(getDreamState);
+  const [projects] = createResource(getProjects);
+
+  /** Extract project identities from dream state `last_dream_at:<identity>` keys. */
+  const knownProjectIds = () => {
+    const s = state() ?? [];
+    return s
+      .filter((e) => e.key.startsWith("last_dream_at:"))
+      .map((e) => e.key.replace("last_dream_at:", ""));
+  };
 
   const handleRunNow = async () => {
-    // Use a default project path — this queues a dream for the next OpenCode pickup
-    await enqueueDream("manual", "Manual trigger from dashboard");
+    // Try to enqueue all known projects, or fall back to projects from DB
+    let ids = knownProjectIds();
+    if (ids.length === 0) {
+      ids = (projects() ?? []).map((p) => p.identity);
+    }
+    if (ids.length === 0) return; // nothing to dream about
+    for (const id of ids) {
+      await enqueueDream(id, "Manual trigger from dashboard");
+    }
     refetchQueue();
   };
 

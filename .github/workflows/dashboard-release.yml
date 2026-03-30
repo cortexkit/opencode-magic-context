@@ -74,8 +74,14 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
-          # Extract signing identity
+          # Extract signing identity — MUST be "Developer ID Application", not "Apple Development"
           IDENTITY=$(security find-identity -v -p codesigning $KEYCHAIN_PATH | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No 'Developer ID Application' certificate found in keychain. Check APPLE_CERTIFICATE secret."
+            security find-identity -v -p codesigning $KEYCHAIN_PATH
+            exit 1
+          fi
+          echo "Found signing identity: $IDENTITY"
           echo "APPLE_SIGNING_IDENTITY=$IDENTITY" >> $GITHUB_ENV
 
       # macOS: write App Store Connect API key for notarization
