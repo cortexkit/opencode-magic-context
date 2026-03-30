@@ -63,6 +63,7 @@ jobs:
           args: --target ${{ matrix.settings.target }}
           updaterJsonPreferNsis: true
           tagName: ${{ github.ref_name }}
+          releaseName: "Dashboard ${{ github.ref_name }}"
           releaseDraft: true
           assetNamePattern: magic-context-dashboard-[platform]-[arch][ext]
         env:
