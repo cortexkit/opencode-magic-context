@@ -134,7 +134,8 @@ describe("storage-db", () => {
           is_subagent INTEGER DEFAULT 0,
           last_context_percentage REAL DEFAULT 0,
           last_input_tokens INTEGER DEFAULT 0,
-          times_execute_threshold_reached INTEGER DEFAULT 0
+          times_execute_threshold_reached INTEGER DEFAULT 0,
+          cleared_reasoning_through_tag INTEGER DEFAULT 0
         );
       `);
             legacyDb.close(false);

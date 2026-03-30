@@ -31,6 +31,11 @@ export function createSystemPromptHashHandler(deps: {
     flushedSessions: Set<string>;
     lastHeuristicsTurnId: Map<string, string>;
 }): (input: { sessionID?: string }, output: { system: string[] }) => Promise<void> {
+    // Per-session sticky date: we freeze the date string from the system prompt
+    // and only update it on cache-busting passes. This prevents a midnight date
+    // flip from causing an unnecessary flush + cache rebuild.
+    const stickyDateBySession = new Map<string, string>();
+
     return async (input, output): Promise<void> => {
         const sessionId = input.sessionID;
         if (!sessionId) return;
@@ -51,7 +56,41 @@ export function createSystemPromptHashHandler(deps: {
             );
         }
 
-        // ── Step 2: Detect system prompt changes ──
+        // ── Step 2: Freeze volatile date to prevent unnecessary cache busts ──
+        const isCacheBusting = deps.flushedSessions.has(sessionId);
+        const DATE_PATTERN = /Today's date: .+/;
+
+        for (let i = 0; i < output.system.length; i++) {
+            const match = output.system[i].match(DATE_PATTERN);
+            if (!match) continue;
+
+            const currentDate = match[0];
+            const stickyDate = stickyDateBySession.get(sessionId);
+
+            if (!stickyDate) {
+                // First time seeing this session — store the date
+                stickyDateBySession.set(sessionId, currentDate);
+            } else if (currentDate !== stickyDate) {
+                if (isCacheBusting) {
+                    // Cache is already busting — update to the real date
+                    stickyDateBySession.set(sessionId, currentDate);
+                    sessionLog(
+                        sessionId,
+                        `system prompt date updated: ${stickyDate} → ${currentDate} (cache-busting pass)`,
+                    );
+                } else {
+                    // Defer pass — replace with the sticky date to keep prompt stable
+                    output.system[i] = output.system[i].replace(DATE_PATTERN, stickyDate);
+                    sessionLog(
+                        sessionId,
+                        `system prompt date frozen: real=${currentDate}, using=${stickyDate} (defer pass)`,
+                    );
+                }
+            }
+            break;
+        }
+
+        // ── Step 3: Detect system prompt changes ──
         const systemContent = output.system.join("\n");
         if (systemContent.length === 0) return;
 

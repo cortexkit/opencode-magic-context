@@ -45,7 +45,8 @@ function makeMemoryDatabase(): Database {
       last_input_tokens INTEGER DEFAULT 0,
       times_execute_threshold_reached INTEGER DEFAULT 0,
       compartment_in_progress INTEGER DEFAULT 0,
-      system_prompt_hash INTEGER DEFAULT 0
+      system_prompt_hash INTEGER DEFAULT 0,
+      cleared_reasoning_through_tag INTEGER DEFAULT 0
     );
   `);
     return d;
