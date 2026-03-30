@@ -37,15 +37,15 @@ interface FieldDef {
 const FIELD_DEFS: FieldDef[] = [
   // General
   { key: "enabled", label: "Enabled", type: "boolean", description: "Enable the magic-context plugin", section: "General" },
-  { key: "ctx_reduce_enabled", label: "ctx_reduce Enabled", type: "boolean", description: "Enable ctx_reduce tool and nudges. When false, only heuristic cleanup and compartments manage context.", section: "General" },
+  { key: "ctx_reduce_enabled", label: "Agent Controlled Reduction", type: "boolean", description: "Enable agent controlled reductions via ctx_reduce tool. When enabled, agent is prompted and nudged to choose what messages and tool calls to drop periodically. If disabled the system still works via auto drops based on message ages.", section: "General" },
   // Thresholds
   // cache_ttl and execute_threshold_percentage are rendered as custom PerModelField components
-  { key: "nudge_interval_tokens", label: "Nudge Interval (tokens)", type: "number", description: "Token interval between rolling ctx_reduce nudges.", section: "Thresholds" },
+  { key: "nudge_interval_tokens", label: "Nudge Interval (tokens)", type: "number", description: "Token interval between rolling ctx_reduce nudges.", section: "General" },
   // Tags & cleanup
   { key: "protected_tags", label: "Protected Tags", type: "number", description: "Number of recent tags protected from drops.", section: "Tags & Cleanup" },
   { key: "auto_drop_tool_age", label: "Auto Drop Tool Age", type: "number", description: "Tag age after which tool outputs are automatically dropped.", section: "Tags & Cleanup" },
   { key: "clear_reasoning_age", label: "Clear Reasoning Age", type: "number", description: "Tag age after which reasoning blocks are cleared.", section: "Tags & Cleanup" },
-  { key: "iteration_nudge_threshold", label: "Iteration Nudge Threshold", type: "number", description: "Number of consecutive tool calls before showing an iteration nudge.", section: "Tags & Cleanup" },
+  { key: "iteration_nudge_threshold", label: "Iteration Nudge Threshold", type: "number", description: "Number of consecutive tool calls before showing an iteration nudge.", section: "General" },
   // Historian
   { key: "compartment_token_budget", label: "Compartment Token Budget", type: "number", description: "Max tokens per historian chunk input.", section: "Historian" },
   { key: "history_budget_percentage", label: "History Budget %", type: "number", description: "Fraction of context limit reserved for rendered history (0.0–1.0).", section: "Historian" },
@@ -128,13 +128,24 @@ function ConfigForm(props: {
     return JSON.stringify(formData()) !== JSON.stringify(parsed());
   });
 
+  // Section order: Tags & Cleanup goes last (rendered after agent cards)
+  const SECTION_ORDER: Record<string, number> = {
+    "General": 0,
+    "Thresholds": 1,
+    "Historian": 2,
+    "Memory": 3,
+    "Tags & Cleanup": 99,
+  };
+
   const sections = createMemo(() => {
     const groups: Record<string, FieldDef[]> = {};
     for (const field of FIELD_DEFS) {
       if (!groups[field.section]) groups[field.section] = [];
       groups[field.section].push(field);
     }
-    return Object.entries(groups);
+    return Object.entries(groups).sort(([a], [b]) =>
+      (SECTION_ORDER[a] ?? 50) - (SECTION_ORDER[b] ?? 50)
+    );
   });
 
   const handleFieldChange = (key: string, value: unknown) => {
@@ -284,7 +295,7 @@ function ConfigForm(props: {
         </div>
       }>
         <div class="config-grid">
-          <For each={sections()}>
+          <For each={sections().filter(([name]) => name !== "Tags & Cleanup")}>
             {([sectionName, fields]) => {
               const isFullWidth = sectionName === "Historian" || sectionName === "Memory";
               return (
@@ -735,6 +746,23 @@ function ConfigForm(props: {
               </div>
             </div>
           </div>
+
+          {/* Tags & Cleanup — rendered after agent cards */}
+          {(() => {
+            const tagsFields = sections().find(([name]) => name === "Tags & Cleanup");
+            if (!tagsFields) return null;
+            return (
+              <div class="config-card">
+                <div class="config-card-header">
+                  <span class="config-card-icon">🏷️</span>
+                  <span class="config-card-title">Tags & Cleanup</span>
+                </div>
+                <div class="config-card-content">
+                  <For each={tagsFields[1]}>{renderField}</For>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </Show>
     </div>
