@@ -225,7 +225,7 @@ export function createToolExecuteAfterHook(args: {
     toolUsageSinceUserTurn: ToolUsageSinceUserTurn;
 }) {
     return async (input: unknown) => {
-        const typedInput = input as { tool?: string; sessionID?: string };
+        const typedInput = input as { tool?: string; sessionID?: string; args?: unknown };
         if (!typedInput.sessionID || !typedInput.tool) {
             return;
         }
@@ -235,7 +235,17 @@ export function createToolExecuteAfterHook(args: {
             args.recentReduceBySession.set(typedInput.sessionID, Date.now());
         }
         if (typedInput.tool === "todowrite") {
-            onNoteTrigger(args.db, typedInput.sessionID, "todos_complete");
+            // Only trigger note nudge when ALL todo items are terminal (completed/cancelled).
+            // Firing on every todowrite is too eager — agents call it repeatedly while working.
+            const todoArgs = typedInput.args as { todos?: Array<{ status?: string }> } | undefined;
+            const todos = todoArgs?.todos;
+            if (
+                Array.isArray(todos) &&
+                todos.length > 0 &&
+                todos.every((t) => t.status === "completed" || t.status === "cancelled")
+            ) {
+                onNoteTrigger(args.db, typedInput.sessionID, "todos_complete");
+            }
         }
         if (typedInput.tool === "ctx_note") {
             clearNoteNudgeState(args.db, typedInput.sessionID);

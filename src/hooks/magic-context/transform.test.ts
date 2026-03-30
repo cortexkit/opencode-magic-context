@@ -316,6 +316,9 @@ describe("createTransform", () => {
             droppedCarrierTag!.tagNumber,
             "dropped",
         );
+        // Placeholder stripping now requires a cache-busting pass to detect new
+        // empty shells. Adding session to flushedSessions simulates that.
+        const flushed = new Set<string>(["ses-compartment-dropped-carrier"]);
         replaceAllCompartments(db, "ses-compartment-dropped-carrier", [
             {
                 sequence: 0,
@@ -340,7 +343,7 @@ describe("createTransform", () => {
             nudger: () => null,
             db,
             nudgePlacements: createNudgePlacementStore(),
-            flushedSessions: new Set<string>(),
+            flushedSessions: flushed,
             lastHeuristicsTurnId: new Map<string, string>(),
             clearReasoningAge: 50,
             protectedTags: 0,
@@ -694,6 +697,9 @@ describe("createTransform", () => {
         //#given
         useTempDataHome("context-transform-flushed-");
         const scheduler: Scheduler = { shouldExecute: mock(() => "defer" as const) };
+        // Placeholder stripping requires a cache-busting pass. Use flushedSessions
+        // so the second pass (which sees the dropped tag) is treated as a bust.
+        const flushedSessions = new Set<string>();
         const transform = createTransform({
             tagger: createTagger(),
             scheduler,
@@ -706,7 +712,7 @@ describe("createTransform", () => {
             nudger: () => null,
             db: openDatabase(),
             nudgePlacements: createNudgePlacementStore(),
-            flushedSessions: new Set<string>(),
+            flushedSessions,
             lastHeuristicsTurnId: new Map<string, string>(),
             clearReasoningAge: 50,
             protectedTags: 0,
@@ -729,6 +735,7 @@ describe("createTransform", () => {
         updateTagStatus(db, "ses-1", 2, "dropped");
         const pendingOps = getPendingOps(db, "ses-1");
         expect(pendingOps).toHaveLength(0);
+        flushedSessions.add("ses-1");
 
         const secondPass: TestMessage[] = [
             {

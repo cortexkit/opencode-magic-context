@@ -269,3 +269,30 @@ export function clearPersistedNoteNudge(db: Database, sessionId: string): void {
         "UPDATE session_meta SET note_nudge_trigger_pending = 0, note_nudge_trigger_message_id = '', note_nudge_sticky_text = '', note_nudge_sticky_message_id = '' WHERE session_id = ?",
     ).run(sessionId);
 }
+
+// ── Stripped placeholder message IDs ──
+
+export function getStrippedPlaceholderIds(db: Database, sessionId: string): Set<string> {
+    const row = db
+        .prepare("SELECT stripped_placeholder_ids FROM session_meta WHERE session_id = ?")
+        .get(sessionId) as { stripped_placeholder_ids?: string } | null;
+    const raw = row?.stripped_placeholder_ids;
+    if (!raw || raw.length === 0) return new Set();
+    try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed))
+            return new Set(parsed.filter((v: unknown) => typeof v === "string"));
+    } catch {
+        // Intentional: corrupt JSON → treat as empty
+    }
+    return new Set();
+}
+
+export function setStrippedPlaceholderIds(db: Database, sessionId: string, ids: Set<string>): void {
+    ensureSessionMetaRow(db, sessionId);
+    const json = ids.size > 0 ? JSON.stringify([...ids]) : "";
+    db.prepare("UPDATE session_meta SET stripped_placeholder_ids = ? WHERE session_id = ?").run(
+        json,
+        sessionId,
+    );
+}

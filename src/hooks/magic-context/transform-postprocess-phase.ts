@@ -3,8 +3,10 @@ import {
     clearPersistedStickyTurnReminder,
     getPendingOps,
     getPersistedStickyTurnReminder,
+    getStrippedPlaceholderIds,
     getTopNBySize,
     setPersistedStickyTurnReminder,
+    setStrippedPlaceholderIds,
     updateSessionMeta,
 } from "../../features/magic-context/storage";
 import type { SessionMeta, TagEntry } from "../../features/magic-context/types";
@@ -289,12 +291,67 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
     // These shells waste tokens — there is no recall mechanism to use them.
     // MUST run AFTER compartment injection: renderCompartmentInjection checks whether
     // messages[0] is a dropped placeholder to decide if it needs a synthetic carrier message.
-    const strippedDropped = stripDroppedPlaceholderMessages(args.messages);
-    if (strippedDropped > 0) {
-        sessionLog(
-            args.sessionId,
-            `stripped ${strippedDropped} empty dropped-placeholder messages`,
-        );
+    //
+    // Cache-safe: replay previously-stripped IDs on every pass, only detect new
+    // empty shells on cache-busting passes. Persist the set so defer passes
+    // produce the same message array as the bust pass that discovered them.
+    {
+        const persistedIds = getStrippedPlaceholderIds(args.db, args.sessionId);
+
+        // Step 1: Replay — remove messages whose IDs were stripped on a prior bust pass.
+        if (persistedIds.size > 0) {
+            let replayed = 0;
+            for (let i = args.messages.length - 1; i >= 0; i--) {
+                const msgId = args.messages[i].info.id;
+                if (msgId && persistedIds.has(msgId)) {
+                    args.messages.splice(i, 1);
+                    replayed++;
+                }
+            }
+            if (replayed > 0) {
+                sessionLog(
+                    args.sessionId,
+                    `placeholder replay: removed ${replayed} previously-stripped messages`,
+                );
+            }
+        }
+
+        // Step 2: Detect — only on cache-busting passes, find NEW empty shells.
+        if (isCacheBustingPass) {
+            // Snapshot IDs before stripping so we can diff after.
+            const preStripIds = new Set<string>();
+            for (const msg of args.messages) {
+                if (msg.info.id) preStripIds.add(msg.info.id);
+            }
+
+            const strippedDropped = stripDroppedPlaceholderMessages(args.messages);
+            if (strippedDropped > 0) {
+                // Find IDs that disappeared — those are the newly stripped messages.
+                const postStripIds = new Set<string>();
+                for (const msg of args.messages) {
+                    if (msg.info.id) postStripIds.add(msg.info.id);
+                }
+                let newlyStrippedCount = 0;
+                for (const id of preStripIds) {
+                    if (!postStripIds.has(id)) {
+                        persistedIds.add(id);
+                        newlyStrippedCount++;
+                    }
+                }
+                // Prune persisted IDs that no longer appear in the live message set
+                // (e.g., after compaction or history trimming removes old messages).
+                for (const id of persistedIds) {
+                    if (!preStripIds.has(id) && !postStripIds.has(id)) {
+                        persistedIds.delete(id);
+                    }
+                }
+                setStrippedPlaceholderIds(args.db, args.sessionId, persistedIds);
+                sessionLog(
+                    args.sessionId,
+                    `stripped ${strippedDropped} placeholder messages (${newlyStrippedCount} new, ${persistedIds.size} total persisted)`,
+                );
+            }
+        }
     }
 
     // Remove system-injected messages (notifications, reminders, internal markers)

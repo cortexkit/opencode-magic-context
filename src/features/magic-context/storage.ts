@@ -21,9 +21,11 @@ export {
     getOrCreateSessionMeta,
     getPersistedNudgePlacement,
     getPersistedStickyTurnReminder,
+    getStrippedPlaceholderIds,
     loadPersistedUsage,
     setPersistedNudgePlacement,
     setPersistedStickyTurnReminder,
+    setStrippedPlaceholderIds,
     updateSessionMeta,
 } from "./storage-meta";
 export {
