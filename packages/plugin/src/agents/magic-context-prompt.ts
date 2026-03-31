@@ -22,6 +22,13 @@ Use \`ctx_note\` for deferred intentions — things to tackle later, not right n
 Use \`ctx_memory\` to manage cross-session project memories. Write new memories or delete stale ones. Memories persist across sessions and are automatically injected into new sessions.
 Use \`ctx_search\` to search across project memories, session facts, and conversation history from one query.
 Use \`ctx_expand\` to decompress a compartment range to see the original conversation transcript. Use \`start\`/\`end\` from \`<compartment start=N end=M>\` attributes. Returns the compacted U:/A: transcript for that message range, capped at ~15K tokens.
+**Search before asking the user**: If you can't remember or don't know something that might have been discussed before or stored in project memory, use \`ctx_search\` before asking the user. Examples:
+- Can't remember where a related codebase or dependency lives → \`ctx_search(query="opencode source code path")\`
+- Forgot a prior architectural decision or constraint → \`ctx_search(query="why did we choose SQLite over postgres")\`
+- Need a config value, API key location, or environment detail → \`ctx_search(query="embedding provider configuration")\`
+- Looking for how something was implemented previously → \`ctx_search(query="how does the dreamer lease work")\`
+- Want to recall what was decided in an earlier conversation → \`ctx_search(query="dashboard release signing setup")\`
+\`ctx_search\` returns ranked results from memories, session facts, and raw message history. Use message ordinals from results with \`ctx_expand\` to retrieve surrounding conversation context.
 NEVER drop large ranges blindly (e.g., "1-50"). Review each tag before deciding.
 NEVER drop user messages — they are short and will be summarized by compartmentalization automatically. Dropping them loses context the historian needs.
 NEVER drop assistant text messages unless they are exceptionally large. Your conversation messages are lightweight; only large tool outputs are worth dropping.
@@ -32,7 +39,14 @@ const BASE_INTRO_NO_REDUCE = `Messages and tool outputs are tagged with §N§ id
 Use \`ctx_note\` for deferred intentions — things to tackle later, not right now. NOT for task tracking (use todos). Notes survive context compression and you'll be reminded at natural work boundaries (after commits, historian runs, todo completion).
 Use \`ctx_memory\` to manage cross-session project memories. Write new memories or delete stale ones. Memories persist across sessions and are automatically injected into new sessions.
 Use \`ctx_search\` to search across project memories, session facts, and conversation history from one query.
-Use \`ctx_expand\` to decompress a compartment range to see the original conversation transcript. Use \`start\`/\`end\` from \`<compartment start=N end=M>\` attributes. Returns the compacted U:/A: transcript for that message range, capped at ~15K tokens.`;
+Use \`ctx_expand\` to decompress a compartment range to see the original conversation transcript. Use \`start\`/\`end\` from \`<compartment start=N end=M>\` attributes. Returns the compacted U:/A: transcript for that message range, capped at ~15K tokens.
+**Search before asking the user**: If you can't remember or don't know something that might have been discussed before or stored in project memory, use \`ctx_search\` before asking the user. Examples:
+- Can't remember where a related codebase or dependency lives → \`ctx_search(query="opencode source code path")\`
+- Forgot a prior architectural decision or constraint → \`ctx_search(query="why did we choose SQLite over postgres")\`
+- Need a config value, API key location, or environment detail → \`ctx_search(query="embedding provider configuration")\`
+- Looking for how something was implemented previously → \`ctx_search(query="how does the dreamer lease work")\`
+- Want to recall what was decided in an earlier conversation → \`ctx_search(query="dashboard release signing setup")\`
+\`ctx_search\` returns ranked results from memories, session facts, and raw message history. Use message ordinals from results with \`ctx_expand\` to retrieve surrounding conversation context.`;
 
 const SISYPHUS_SECTION = `
 ### Reduction Triggers
