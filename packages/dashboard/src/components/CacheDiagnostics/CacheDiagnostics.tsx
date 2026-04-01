@@ -2,27 +2,28 @@ import { createSignal, For, Show, onCleanup, onMount } from "solid-js";
 import type { DbCacheEvent, SessionCacheStats } from "../../lib/types";
 import { formatDateTime, getCacheEventsFromDb, getSessions, truncate } from "../../lib/api";
 
+// Module-level cache — survives component unmount/remount (page navigation)
+let cachedEvents: DbCacheEvent[] = [];
+let cachedWatermark: number | null = null;
+
 export default function CacheDiagnostics() {
-  const [events, setEvents] = createSignal<DbCacheEvent[]>([]);
+  const [events, setEvents] = createSignal<DbCacheEvent[]>(cachedEvents);
   const [sessionStats, setSessionStats] = createSignal<SessionCacheStats[]>([]);
   const [sessionNames, setSessionNames] = createSignal<Record<string, string>>({});
-  const [loading, setLoading] = createSignal(true);
+  const [loading, setLoading] = createSignal(cachedEvents.length === 0);
   const [paused, setPaused] = createSignal(false);
   const [selectedSession, setSelectedSession] = createSignal<string | null>(null);
   const [hideSubagents, setHideSubagents] = createSignal(true);
   const [subagentIds, setSubagentIds] = createSignal<Set<string>>(new Set());
 
-  // Track watermark for incremental fetching — only fetch new events after initial load
-  let watermark: number | null = null;
-
   const fetchData = async () => {
     try {
       const [newEvents, sessions] = await Promise.all([
-        getCacheEventsFromDb(200, watermark),
+        getCacheEventsFromDb(200, cachedWatermark),
         getSessions(),
       ]);
 
-      if (watermark === null) {
+      if (cachedWatermark === null) {
         // Initial load — use full result
         setEvents(newEvents);
       } else if (newEvents.length > 0) {
@@ -31,10 +32,11 @@ export default function CacheDiagnostics() {
         setEvents(prev => [...prev, ...newEvents].slice(-200));
       }
 
-      // Update watermark to latest timestamp
+      // Sync to module-level cache and update watermark
       const allEvents = events();
+      cachedEvents = allEvents;
       if (allEvents.length > 0) {
-        watermark = Math.max(...allEvents.map(e => e.timestamp));
+        cachedWatermark = Math.max(...allEvents.map(e => e.timestamp));
       }
 
       // Compute session stats client-side from cached events (no extra DB query)
