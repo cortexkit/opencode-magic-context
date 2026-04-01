@@ -492,27 +492,49 @@ fn match_log_cause(
     }
 }
 
-fn load_raw_db_cache_events(limit: usize) -> Result<Vec<RawDbCacheEvent>, rusqlite::Error> {
+fn load_raw_db_cache_events(limit: usize, since_timestamp: Option<i64>) -> Result<Vec<RawDbCacheEvent>, rusqlite::Error> {
     let Some(opencode_db_path) = resolve_opencode_db_path() else {
         return Ok(Vec::new());
     };
 
     let conn = open_readonly(&opencode_db_path)?;
-    let mut stmt = conn.prepare(
-        "SELECT CAST(m.id AS TEXT), m.session_id, m.time_created,
-                COALESCE(CAST(json_extract(m.data, '$.tokens.input') AS INTEGER), 0) AS input_tokens,
-                COALESCE(CAST(json_extract(m.data, '$.tokens.cache.read') AS INTEGER), 0) AS cache_read,
-                COALESCE(CAST(json_extract(m.data, '$.tokens.cache.write') AS INTEGER), 0) AS cache_write,
-                COALESCE(CAST(json_extract(m.data, '$.tokens.total') AS INTEGER), 0) AS total_tokens,
-                CAST(json_extract(m.data, '$.agent') AS TEXT) AS agent
-         FROM message m
-         WHERE json_extract(m.data, '$.role') = 'assistant'
-           AND COALESCE(CAST(json_extract(m.data, '$.tokens.total') AS INTEGER), 0) > 0
-         ORDER BY m.time_created DESC
-         LIMIT ?1",
-    )?;
 
-    let rows = stmt.query_map([limit as i64], |row| {
+    let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(since) = since_timestamp {
+        (
+            "SELECT CAST(m.id AS TEXT), m.session_id, m.time_created,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.input') AS INTEGER), 0) AS input_tokens,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.cache.read') AS INTEGER), 0) AS cache_read,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.cache.write') AS INTEGER), 0) AS cache_write,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.total') AS INTEGER), 0) AS total_tokens,
+                    CAST(json_extract(m.data, '$.agent') AS TEXT) AS agent
+             FROM message m
+             WHERE json_extract(m.data, '$.role') = 'assistant'
+               AND COALESCE(CAST(json_extract(m.data, '$.tokens.total') AS INTEGER), 0) > 0
+               AND m.time_created > ?1
+             ORDER BY m.time_created DESC
+             LIMIT ?2".to_string(),
+            vec![Box::new(since) as Box<dyn rusqlite::types::ToSql>, Box::new(limit as i64)],
+        )
+    } else {
+        (
+            "SELECT CAST(m.id AS TEXT), m.session_id, m.time_created,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.input') AS INTEGER), 0) AS input_tokens,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.cache.read') AS INTEGER), 0) AS cache_read,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.cache.write') AS INTEGER), 0) AS cache_write,
+                    COALESCE(CAST(json_extract(m.data, '$.tokens.total') AS INTEGER), 0) AS total_tokens,
+                    CAST(json_extract(m.data, '$.agent') AS TEXT) AS agent
+             FROM message m
+             WHERE json_extract(m.data, '$.role') = 'assistant'
+               AND COALESCE(CAST(json_extract(m.data, '$.tokens.total') AS INTEGER), 0) > 0
+             ORDER BY m.time_created DESC
+             LIMIT ?1".to_string(),
+            vec![Box::new(limit as i64) as Box<dyn rusqlite::types::ToSql>],
+        )
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(params_refs.as_slice(), |row| {
         Ok(RawDbCacheEvent {
             message_id: row.get(0)?,
             session_id: row.get(1)?,
@@ -584,15 +606,15 @@ fn build_db_cache_events(rows: Vec<RawDbCacheEvent>, enrich_causes: bool) -> Vec
     chronological
 }
 
-pub fn get_cache_events_from_db(limit: usize) -> Vec<DbCacheEvent> {
-    load_raw_db_cache_events(limit)
+pub fn get_cache_events_from_db(limit: usize, since_timestamp: Option<i64>) -> Vec<DbCacheEvent> {
+    load_raw_db_cache_events(limit, since_timestamp)
         .map(|rows| build_db_cache_events(rows, true))
         .unwrap_or_default()
 }
 
 pub fn get_session_cache_stats_from_db(limit: usize) -> Vec<SessionCacheStats> {
     // Reuse raw rows instead of re-querying + re-parsing logs
-    let events = load_raw_db_cache_events(200)
+    let events = load_raw_db_cache_events(200, None)
         .map(|rows| build_db_cache_events(rows, false)) // skip log enrichment for stats
         .unwrap_or_default();
     let mut map: HashMap<String, (usize, i64, i64, i64, i64, usize)> = HashMap::new();

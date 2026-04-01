@@ -183,8 +183,8 @@ pub fn get_session_cache_stats(max_lines: Option<usize>, limit: Option<usize>) -
 }
 
 #[tauri::command]
-pub fn get_cache_events_from_db(limit: Option<usize>) -> Vec<db::DbCacheEvent> {
-    db::get_cache_events_from_db(limit.unwrap_or(200))
+pub fn get_cache_events_from_db(limit: Option<usize>, since_timestamp: Option<i64>) -> Vec<db::DbCacheEvent> {
+    db::get_cache_events_from_db(limit.unwrap_or(200), since_timestamp)
 }
 
 #[tauri::command]

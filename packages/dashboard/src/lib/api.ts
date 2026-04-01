@@ -143,9 +143,13 @@ export async function getCacheEvents(
 }
 
 export async function getCacheEventsFromDb(
-  limit?: number
+  limit?: number,
+  sinceTimestamp?: number | null
 ): Promise<DbCacheEvent[]> {
-  return invoke("get_cache_events_from_db", { limit: limit ?? 200 });
+  return invoke("get_cache_events_from_db", {
+    limit: limit ?? 200,
+    sinceTimestamp: sinceTimestamp ?? null,
+  });
 }
 
 // ── Config API ──────────────────────────────────────────────

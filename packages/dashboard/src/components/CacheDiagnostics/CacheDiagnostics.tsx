@@ -1,6 +1,6 @@
 import { createSignal, For, Show, onCleanup, onMount } from "solid-js";
 import type { DbCacheEvent, SessionCacheStats } from "../../lib/types";
-import { formatDateTime, getCacheEventsFromDb, getSessionCacheStatsFromDb, getSessions, truncate } from "../../lib/api";
+import { formatDateTime, getCacheEventsFromDb, getSessions, truncate } from "../../lib/api";
 
 export default function CacheDiagnostics() {
   const [events, setEvents] = createSignal<DbCacheEvent[]>([]);
@@ -12,15 +12,61 @@ export default function CacheDiagnostics() {
   const [hideSubagents, setHideSubagents] = createSignal(true);
   const [subagentIds, setSubagentIds] = createSignal<Set<string>>(new Set());
 
+  // Track watermark for incremental fetching — only fetch new events after initial load
+  let watermark: number | null = null;
+
   const fetchData = async () => {
     try {
-      const [eventsData, statsData, sessions] = await Promise.all([
-        getCacheEventsFromDb(200),
-        getSessionCacheStatsFromDb(20),
+      const [newEvents, sessions] = await Promise.all([
+        getCacheEventsFromDb(200, watermark),
         getSessions(),
       ]);
-      setEvents(eventsData);
-      setSessionStats(statsData);
+
+      if (watermark === null) {
+        // Initial load — use full result
+        setEvents(newEvents);
+      } else if (newEvents.length > 0) {
+        // Incremental — prepend new events (they're newest-first from DB, but
+        // build_db_cache_events reverses to chronological), trim to 200
+        setEvents(prev => [...prev, ...newEvents].slice(-200));
+      }
+
+      // Update watermark to latest timestamp
+      const allEvents = events();
+      if (allEvents.length > 0) {
+        watermark = Math.max(...allEvents.map(e => e.timestamp));
+      }
+
+      // Compute session stats client-side from cached events (no extra DB query)
+      const statsMap = new Map<string, { count: number; read: number; write: number; input: number; lastTs: number; busts: number }>();
+      for (const e of allEvents) {
+        if (!e.session_id) continue;
+        const s = statsMap.get(e.session_id) ?? { count: 0, read: 0, write: 0, input: 0, lastTs: 0, busts: 0 };
+        s.count++;
+        s.read += e.cache_read;
+        s.write += e.cache_write;
+        s.input += e.input_tokens;
+        if (e.timestamp > s.lastTs) s.lastTs = e.timestamp;
+        if (e.severity === "bust" || e.severity === "full_bust") s.busts++;
+        statsMap.set(e.session_id, s);
+      }
+      const stats = [...statsMap.entries()]
+        .map(([sid, s]) => {
+          const total = s.read + s.write + s.input;
+          return {
+            session_id: sid,
+            event_count: s.count,
+            total_cache_read: s.read,
+            total_cache_write: s.write,
+            total_input: s.input,
+            hit_ratio: total > 0 ? s.read / total : 0,
+            last_timestamp: new Date(s.lastTs).toISOString(),
+            bust_count: s.busts,
+          };
+        })
+        .sort((a, b) => b.last_timestamp.localeCompare(a.last_timestamp));
+      setSessionStats(stats);
+
       // Build session ID → title lookup and subagent set
       const names: Record<string, string> = {};
       const subs = new Set<string>();
