@@ -6,11 +6,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     closeDatabase,
+    getMaxCompressionDepth,
     getOrCreateSessionMeta,
     getPersistedNudgePlacement,
     getPersistedStickyTurnReminder,
     getStrippedPlaceholderIds,
     getTagsBySession,
+    incrementCompressionDepth,
     insertTag,
     openDatabase,
     setPersistedNudgePlacement,
@@ -327,6 +329,7 @@ describe("createEventHandler", () => {
         const handler = createEventHandler(deps);
 
         insertTag(deps.db, "ses-clean", "m-1", "message", 100, 1);
+        incrementCompressionDepth(deps.db, "ses-clean", 1, 3);
         updateSessionMeta(deps.db, "ses-clean", { lastNudgeTokens: 20_000, isSubagent: true });
 
         await handler({
@@ -347,6 +350,7 @@ describe("createEventHandler", () => {
         expect(taggerCleanup).toHaveBeenCalledWith("ses-clean");
         expect(clearNudgePlacement).toHaveBeenCalledWith("ses-clean");
         expect(getTagsBySession(openDatabase(), "ses-clean")).toHaveLength(0);
+        expect(getMaxCompressionDepth(openDatabase(), "ses-clean")).toBe(0);
         expect(getOrCreateSessionMeta(openDatabase(), "ses-clean").isSubagent).toBe(false);
     });
 

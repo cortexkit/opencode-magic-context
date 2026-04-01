@@ -8,6 +8,12 @@ export {
     type SessionFact,
 } from "./compartment-storage";
 export {
+    clearCompressionDepth,
+    getAverageCompressionDepth,
+    getMaxCompressionDepth,
+    incrementCompressionDepth,
+} from "./compression-depth-storage";
+export {
     clearIndexedMessages,
     deleteIndexedMessage,
 } from "./message-index";

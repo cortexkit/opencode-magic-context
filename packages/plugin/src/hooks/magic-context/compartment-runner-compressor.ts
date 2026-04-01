@@ -2,10 +2,13 @@ import type { Database } from "bun:sqlite";
 import { DEFAULT_HISTORIAN_TIMEOUT_MS } from "../../config/schema/magic-context";
 import type { Compartment } from "../../features/magic-context/compartment-storage";
 import {
+    getAverageCompressionDepth,
     getCompartments,
+    getMaxCompressionDepth,
     getSessionFacts,
+    incrementCompressionDepth,
     replaceAllCompartmentState,
-} from "../../features/magic-context/compartment-storage";
+} from "../../features/magic-context/storage";
 import type { PluginContext } from "../../plugin/types";
 import { normalizeSDKResponse, promptSyncWithModelSuggestionRetry } from "../../shared";
 import { extractLatestAssistantText } from "../../shared/assistant-message-extractor";
@@ -64,32 +67,113 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
         `compressor: history block ~${totalTokens} tokens exceeds budget ${historyBudgetTokens} by ~${overage} tokens`,
     );
 
-    // Select oldest N compartments whose combined tokens are ~2× the overage
-    // (so compressing them to ~50% gets us back under budget)
-    const targetSelectionTokens = overage * 2;
-    let selectedTokens = 0;
-    let selectedCount = 0;
-
-    for (const c of compartments) {
-        if (selectedTokens >= targetSelectionTokens) break;
-        selectedTokens += estimateTokens(
-            `<compartment start="${c.startMessage}" end="${c.endMessage}" title="${c.title}">\n${c.content}\n</compartment>\n`,
+    const maxDepth = getMaxCompressionDepth(db, sessionId);
+    const scoredCompartments = compartments.map((compartment, index) => {
+        const tokenEstimate = estimateTokens(
+            `<compartment start="${compartment.startMessage}" end="${compartment.endMessage}" title="${compartment.title}">\n${compartment.content}\n</compartment>\n`,
         );
-        selectedCount++;
+        const averageDepth = getAverageCompressionDepth(
+            db,
+            sessionId,
+            compartment.startMessage,
+            compartment.endMessage,
+        );
+        const normalizedAge = compartments.length > 1 ? 1 - index / (compartments.length - 1) : 1;
+        const normalizedDepth = maxDepth > 0 ? 1 - averageDepth / maxDepth : 1;
+        const score = 0.7 * normalizedAge + 0.3 * normalizedDepth;
+        return {
+            compartment,
+            index,
+            tokenEstimate,
+            averageDepth,
+            score,
+        };
+    });
+
+    const sortedByScore = [...scoredCompartments].sort(
+        (left, right) => right.score - left.score || left.index - right.index,
+    );
+
+    const targetSelectionTokens = overage * 2;
+    let selectedCandidateTokens = 0;
+    const selectedCandidates: typeof scoredCompartments = [];
+
+    for (const compartment of sortedByScore) {
+        if (selectedCandidateTokens >= targetSelectionTokens) break;
+        selectedCandidates.push(compartment);
+        selectedCandidateTokens += compartment.tokenEstimate;
     }
 
-    // Need at least 2 compartments to compress (merging 1 is pointless)
-    if (selectedCount < 2) {
+    if (selectedCandidates.length < 2) {
         sessionLog(sessionId, "compressor: not enough compartments to compress, skipping");
         return false;
     }
 
-    const selectedCompartments = compartments.slice(0, selectedCount);
+    const selectedStartIndex = Math.min(
+        ...selectedCandidates.map((compartment) => compartment.index),
+    );
+    const selectedEndIndex = Math.max(
+        ...selectedCandidates.map((compartment) => compartment.index),
+    );
+    let selectedScoredCompartments = scoredCompartments.slice(
+        selectedStartIndex,
+        selectedEndIndex + 1,
+    );
+
+    // Guard: if expanding to a contiguous range inflated tokens beyond 3× the
+    // scored picks, fall back to the oldest contiguous subset of the scored picks.
+    const expandedTokens = selectedScoredCompartments.reduce((t, c) => t + c.tokenEstimate, 0);
+    if (expandedTokens > selectedCandidateTokens * 3) {
+        const sortedByIndex = [...selectedCandidates].sort((a, b) => a.index - b.index);
+        // Find longest contiguous run from the first scored pick
+        let runEnd = sortedByIndex[0].index;
+        for (let i = 1; i < sortedByIndex.length; i++) {
+            if (sortedByIndex[i].index === runEnd + 1) {
+                runEnd = sortedByIndex[i].index;
+            } else {
+                break;
+            }
+        }
+        selectedScoredCompartments = scoredCompartments.slice(sortedByIndex[0].index, runEnd + 1);
+        sessionLog(
+            sessionId,
+            `compressor: contiguous expansion was ${expandedTokens} tokens (>${selectedCandidateTokens * 3}), fell back to contiguous run of ${selectedScoredCompartments.length}`,
+        );
+    }
+
+    if (selectedScoredCompartments.length < 2) {
+        sessionLog(sessionId, "compressor: not enough adjacent compartments to compress, skipping");
+        return false;
+    }
+
+    const selectedCompartments = selectedScoredCompartments.map(
+        (scoredCompartment) => scoredCompartment.compartment,
+    );
+    const selectedTokens = selectedScoredCompartments.reduce(
+        (total, scoredCompartment) => total + scoredCompartment.tokenEstimate,
+        0,
+    );
     const targetTokens = Math.floor(selectedTokens / 2);
+    const minAverageDepth = Math.min(
+        ...selectedScoredCompartments.map((compartment) => compartment.averageDepth),
+    );
+    const maxAverageDepth = Math.max(
+        ...selectedScoredCompartments.map((compartment) => compartment.averageDepth),
+    );
+    const minScore = Math.min(
+        ...selectedScoredCompartments.map((compartment) => compartment.score),
+    );
+    const maxScore = Math.max(
+        ...selectedScoredCompartments.map((compartment) => compartment.score),
+    );
 
     sessionLog(
         sessionId,
-        `compressor: selected ${selectedCount} oldest compartments (~${selectedTokens} tokens), target ~${targetTokens} tokens`,
+        `compressor: scored ${compartments.length} compartments, selected ${selectedCompartments.length} (avg_depth range: ${minAverageDepth.toFixed(1)}-${maxAverageDepth.toFixed(1)}, score range: ${minScore.toFixed(1)}-${maxScore.toFixed(1)})`,
+    );
+    sessionLog(
+        sessionId,
+        `compressor: selected contiguous range ${selectedCompartments[0].startMessage}-${selectedCompartments[selectedCompartments.length - 1].endMessage} (~${selectedTokens} tokens), target ~${targetTokens} tokens`,
     );
 
     try {
@@ -109,9 +193,10 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
         }
 
         // Replace the selected compartments with compressed ones, keep the rest unchanged
-        const remainingCompartments = compartments.slice(selectedCount);
+        const leadingCompartments = compartments.slice(0, selectedStartIndex);
+        const trailingCompartments = compartments.slice(selectedEndIndex + 1);
         const allCompartments = [
-            ...compressed.map((c, i) => ({
+            ...leadingCompartments.map((c, i) => ({
                 sequence: i,
                 startMessage: c.startMessage,
                 endMessage: c.endMessage,
@@ -120,8 +205,17 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
                 title: c.title,
                 content: c.content,
             })),
-            ...remainingCompartments.map((c, i) => ({
-                sequence: compressed.length + i,
+            ...compressed.map((c, i) => ({
+                sequence: leadingCompartments.length + i,
+                startMessage: c.startMessage,
+                endMessage: c.endMessage,
+                startMessageId: c.startMessageId,
+                endMessageId: c.endMessageId,
+                title: c.title,
+                content: c.content,
+            })),
+            ...trailingCompartments.map((c, i) => ({
+                sequence: leadingCompartments.length + compressed.length + i,
                 startMessage: c.startMessage,
                 endMessage: c.endMessage,
                 startMessageId: c.startMessageId,
@@ -172,10 +266,15 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
             allCompartments,
             facts.map((f) => ({ category: f.category, content: f.content })),
         );
+        incrementCompressionDepth(db, sessionId, originalStart, originalEnd);
 
         sessionLog(
             sessionId,
-            `compressor: replaced ${selectedCount} compartments with ${compressed.length} compressed compartments`,
+            `compressor: replaced ${selectedCompartments.length} compartments with ${compressed.length} compressed compartments`,
+        );
+        sessionLog(
+            sessionId,
+            `compressor: incremented compression depth for messages ${originalStart}-${originalEnd}`,
         );
         return true;
     } catch (error: unknown) {

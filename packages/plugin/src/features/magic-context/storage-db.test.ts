@@ -51,7 +51,7 @@ describe("storage-db", () => {
             expect(isDatabasePersisted(db)).toBe(true);
         });
 
-        it("#when called first time #then creates all 5 required tables", () => {
+        it("#when called first time #then creates required tables", () => {
             useTempDataHome("storage-db-tables-");
 
             const db = openDatabase();
@@ -61,7 +61,13 @@ describe("storage-db", () => {
                 .all() as Array<{ name: string }>;
             const tableNames = tables.map((t) => t.name);
             expect(tableNames).toEqual(
-                expect.arrayContaining(["tags", "pending_ops", "source_contents", "session_meta"]),
+                expect.arrayContaining([
+                    "tags",
+                    "pending_ops",
+                    "source_contents",
+                    "compression_depth",
+                    "session_meta",
+                ]),
             );
         });
 
@@ -80,6 +86,7 @@ describe("storage-db", () => {
                     "idx_pending_ops_session",
                     "idx_source_contents_session",
                     "idx_compartments_session",
+                    "idx_compression_depth_session",
                     "idx_session_facts_session",
                     "idx_session_notes_session",
                 ]),

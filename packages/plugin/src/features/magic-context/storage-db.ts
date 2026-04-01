@@ -60,6 +60,15 @@ export function initializeDatabase(db: Database): void {
       created_at INTEGER NOT NULL,
       UNIQUE(session_id, sequence)
     );
+    CREATE INDEX IF NOT EXISTS idx_compartments_session ON compartments(session_id);
+
+    CREATE TABLE IF NOT EXISTS compression_depth (
+      session_id TEXT NOT NULL,
+      message_ordinal INTEGER NOT NULL,
+      depth INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(session_id, message_ordinal)
+    );
+    CREATE INDEX IF NOT EXISTS idx_compression_depth_session ON compression_depth(session_id);
 
     CREATE TABLE IF NOT EXISTS session_facts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,7 +254,6 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
       created_at INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_compartments_session ON compartments(session_id);
     CREATE INDEX IF NOT EXISTS idx_session_facts_session ON session_facts(session_id);
     CREATE INDEX IF NOT EXISTS idx_recomp_compartments_session ON recomp_compartments(session_id);
     CREATE INDEX IF NOT EXISTS idx_recomp_facts_session ON recomp_facts(session_id);

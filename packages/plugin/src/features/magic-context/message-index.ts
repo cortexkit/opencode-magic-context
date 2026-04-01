@@ -6,6 +6,7 @@ import {
 } from "../../hooks/magic-context/read-session-chunk";
 import type { RawMessage } from "../../hooks/magic-context/read-session-raw";
 import { removeSystemReminders } from "../../shared/system-directive";
+import { clearCompressionDepth } from "./compression-depth-storage";
 
 type PreparedStatement = ReturnType<Database["prepare"]>;
 
@@ -122,6 +123,7 @@ export function clearIndexedMessages(db: Database, sessionId: string): void {
     db.transaction(() => {
         getDeleteFtsStatement(db).run(sessionId);
         getDeleteIndexStatement(db).run(sessionId);
+        clearCompressionDepth(db, sessionId);
     })();
 }
 
