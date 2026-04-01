@@ -171,9 +171,20 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
         sessionId,
         `compressor: scored ${compartments.length} compartments, selected ${selectedCompartments.length} (avg_depth range: ${minAverageDepth.toFixed(1)}-${maxAverageDepth.toFixed(1)}, score range: ${minScore.toFixed(1)}-${maxScore.toFixed(1)})`,
     );
+    // Compute overall average depth for the selected range (used for U: line handling)
+    const overallAverageDepth =
+        selectedScoredCompartments.reduce((sum, c) => sum + c.averageDepth, 0) /
+        selectedScoredCompartments.length;
+    const depthTier =
+        overallAverageDepth < 2
+            ? "preserve U: lines"
+            : overallAverageDepth < 3
+              ? "condense U: lines"
+              : "fold U: into prose";
+
     sessionLog(
         sessionId,
-        `compressor: selected contiguous range ${selectedCompartments[0].startMessage}-${selectedCompartments[selectedCompartments.length - 1].endMessage} (~${selectedTokens} tokens), target ~${targetTokens} tokens`,
+        `compressor: selected contiguous range ${selectedCompartments[0].startMessage}-${selectedCompartments[selectedCompartments.length - 1].endMessage} (~${selectedTokens} tokens), target ~${targetTokens} tokens, avg_depth=${overallAverageDepth.toFixed(1)} (${depthTier})`,
     );
 
     try {
@@ -182,6 +193,7 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
             compartments: selectedCompartments,
             currentTokens: selectedTokens,
             targetTokens,
+            averageDepth: overallAverageDepth,
         });
 
         if (!compressed) {
@@ -290,6 +302,7 @@ interface CompressorPassArgs {
     compartments: Compartment[];
     currentTokens: number;
     targetTokens: number;
+    averageDepth: number;
     historianTimeoutMs?: number;
 }
 
@@ -308,10 +321,11 @@ async function runCompressorPass(args: CompressorPassArgs): Promise<Array<{
         compartments,
         currentTokens,
         targetTokens,
+        averageDepth,
         historianTimeoutMs,
     } = args;
 
-    const prompt = buildCompressorPrompt(compartments, currentTokens, targetTokens);
+    const prompt = buildCompressorPrompt(compartments, currentTokens, targetTokens, averageDepth);
 
     let agentSessionId: string | null = null;
     try {

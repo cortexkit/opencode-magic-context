@@ -102,7 +102,7 @@ You receive a set of compartments that are over budget. Your job is to merge and
 Rules:
 - You have full authority over which compartments to merge and which to keep separate.
 - Merged compartments must cover the same start-to-end range as the originals they replace.
-- Drop verbatim U: (user message) lines from merged compartments. Instead, summarize the user's key intent in the prose: "User directed X. Implemented Y."
+- Follow the U: line handling instructions in each request — they vary based on how many times these compartments have already been compressed.
 - Keep summaries outcome-focused. Mention file paths, function names, commit hashes, and config keys only when they matter conceptually.
 - You may merge 2-5 adjacent compartments into one broader compartment when they share a theme or phase of work.
 - You may keep a compartment separate but shorten its summary.
@@ -126,12 +126,39 @@ export function buildCompressorPrompt(
     }>,
     currentTokens: number,
     targetTokens: number,
+    averageDepth = 0,
 ): string {
     const lines: string[] = [];
     lines.push(
         `These ${compartments.length} compartments use approximately ${currentTokens} tokens. Compress them to approximately ${targetTokens} tokens.`,
     );
     lines.push("");
+
+    // Depth-aware U: message handling instructions
+    if (averageDepth < 2) {
+        lines.push(
+            "These compartments contain U: lines showing what the user asked. Preserve ALL U: lines exactly as they are. Focus compression on the narrative prose — merge compartments, remove redundancy, condense descriptions. Do not modify or remove U: lines.",
+        );
+    } else if (averageDepth < 3) {
+        lines.push(
+            "These compartments have already been compressed multiple times. Condense each U: line to its core intent in one sentence, but keep them as separate U: lines. Focus aggressive compression on the narrative prose.",
+        );
+    } else {
+        lines.push(
+            "These compartments have been heavily compressed. Fold any remaining U: user intent into the narrative prose — do not keep separate U: lines. Write fluent summary paragraphs that naturally capture both what was asked and what was done.",
+        );
+    }
+    lines.push("");
+
+    lines.push("Rules:");
+    lines.push("- Merge adjacent compartments when they cover related work.");
+    lines.push(
+        "- Each output compartment must use the exact start/end ordinals from the input compartments it covers.",
+    );
+    lines.push("- Do not invent new ordinal boundaries that don't exist in the input.");
+    lines.push("- Preserve commit hashes and key technical details where possible.");
+    lines.push("");
+
     for (const c of compartments) {
         lines.push(
             `<compartment start="${c.startMessage}" end="${c.endMessage}" title="${escapeXmlAttr(c.title)}">`,
