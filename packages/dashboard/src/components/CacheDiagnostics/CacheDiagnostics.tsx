@@ -17,7 +17,7 @@ export default function CacheDiagnostics() {
     try {
       const [eventsData, statsData, sessions] = await Promise.all([
         getCacheEvents(2000),
-        getSessionCacheStats(5),
+        getSessionCacheStats(20),
         getSessions(),
       ]);
       setEvents(eventsData);
@@ -50,7 +50,8 @@ export default function CacheDiagnostics() {
 
   const filteredStats = () => {
     const stats = sessionStats();
-    return hideSubagents() ? stats.filter(s => !isSubagent(s.session_id)) : stats;
+    const filtered = hideSubagents() ? stats.filter(s => !isSubagent(s.session_id)) : stats;
+    return filtered.slice(0, 5);
   };
 
   const filteredEvents = () => {
