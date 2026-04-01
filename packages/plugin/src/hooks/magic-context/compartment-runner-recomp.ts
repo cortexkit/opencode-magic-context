@@ -62,8 +62,10 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
         const sessionDirectory = parentSession?.directory ?? directory;
 
         // Render project memories once as read-only reference for fact dedup across all passes
-        const projectPath = resolveProjectIdentity(directory ?? process.cwd());
-        const memories = getMemoriesByProject(db, projectPath, ["active", "permanent"]);
+        const projectPath = directory ? resolveProjectIdentity(directory) : undefined;
+        const memories = projectPath
+            ? getMemoriesByProject(db, projectPath, ["active", "permanent"])
+            : [];
         const memoryBlock = renderMemoryBlock(memories) ?? undefined;
 
         // ── Resume from staging if a previous run was interrupted ────────────
@@ -100,12 +102,14 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
             const promoted = promoteRecompStaging(db, sessionId);
             if (!promoted) return null;
 
-            promoteSessionFactsToMemory(
-                db,
-                sessionId,
-                resolveProjectIdentity(deps.directory ?? process.cwd()),
-                promoted.facts,
-            );
+            if (deps.directory) {
+                promoteSessionFactsToMemory(
+                    db,
+                    sessionId,
+                    resolveProjectIdentity(deps.directory),
+                    promoted.facts,
+                );
+            }
 
             const lastCompartmentEnd =
                 promoted.compartments[promoted.compartments.length - 1]?.endMessage ?? 0;
@@ -268,12 +272,14 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
         const finalCompartments = promoted?.compartments ?? candidateCompartments;
         const finalFacts = promoted?.facts ?? candidateFacts;
 
-        promoteSessionFactsToMemory(
-            db,
-            sessionId,
-            resolveProjectIdentity(deps.directory ?? process.cwd()),
-            finalFacts,
-        );
+        if (deps.directory) {
+            promoteSessionFactsToMemory(
+                db,
+                sessionId,
+                resolveProjectIdentity(deps.directory),
+                finalFacts,
+            );
+        }
 
         const lastCompartmentEnd = finalCompartments[finalCompartments.length - 1]?.endMessage ?? 0;
         if (lastCompartmentEnd > 0) {

@@ -143,12 +143,14 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
             appendCompartments(db, sessionId, newCompartments);
             replaceSessionFacts(db, sessionId, validatedPass.facts ?? []);
         })();
-        promoteSessionFactsToMemory(
-            db,
-            sessionId,
-            resolveProjectIdentity(deps.directory ?? process.cwd()),
-            validatedPass.facts ?? [],
-        );
+        if (deps.directory) {
+            promoteSessionFactsToMemory(
+                db,
+                sessionId,
+                resolveProjectIdentity(deps.directory),
+                validatedPass.facts ?? [],
+            );
+        }
 
         const lastCompartmentEnd = lastNewEnd;
         queueDropsForCompartmentalizedMessages(db, sessionId, lastCompartmentEnd);
