@@ -9,8 +9,22 @@ pub fn resolve_user_config_path() -> PathBuf {
     config_dir.join("opencode").join("magic-context.jsonc")
 }
 
+/// Resolve the active magic-context config path for a project.
+/// Checks root first, then `.opencode/` alt path. Returns the first that exists,
+/// or root path as default for new config creation.
 pub fn resolve_project_config_path(project_path: &str) -> PathBuf {
-    PathBuf::from(project_path).join("magic-context.jsonc")
+    let root_config = PathBuf::from(project_path).join("magic-context.jsonc");
+    if root_config.exists() {
+        return root_config;
+    }
+    let alt_config = PathBuf::from(project_path)
+        .join(".opencode")
+        .join("magic-context.jsonc");
+    if alt_config.exists() {
+        return alt_config;
+    }
+    // Default to root path for new configs
+    root_config
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

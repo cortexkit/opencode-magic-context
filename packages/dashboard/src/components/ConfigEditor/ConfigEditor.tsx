@@ -622,11 +622,11 @@ function ConfigForm(props: {
                   <label class="toggle-switch">
                     <input
                       type="checkbox"
-                      checked={getNestedValue(formData(), "dreamer.enabled") as boolean ?? true}
+                      checked={getNestedValue(formData(), "dreamer.enabled") as boolean ?? false}
                       onChange={(e) => handleFieldChange("dreamer.enabled", e.currentTarget.checked)}
                     />
                     <span class="toggle-slider" />
-                    <span class="toggle-label">{(getNestedValue(formData(), "dreamer.enabled") as boolean ?? true) ? "Enabled" : "Disabled"}</span>
+                    <span class="toggle-label">{(getNestedValue(formData(), "dreamer.enabled") as boolean ?? false) ? "Enabled" : "Disabled"}</span>
                   </label>
                 </div>
 
@@ -652,11 +652,11 @@ function ConfigForm(props: {
                   <label class="toggle-switch">
                     <input
                       type="checkbox"
-                      checked={getNestedValue(formData(), "dreamer.inject_docs") as boolean ?? true}
+                      checked={getNestedValue(formData(), "dreamer.inject_docs") as boolean ?? false}
                       onChange={(e) => handleFieldChange("dreamer.inject_docs", e.currentTarget.checked)}
                     />
                     <span class="toggle-slider" />
-                    <span class="toggle-label">{(getNestedValue(formData(), "dreamer.inject_docs") as boolean ?? true) ? "Enabled" : "Disabled"}</span>
+                    <span class="toggle-label">{(getNestedValue(formData(), "dreamer.inject_docs") as boolean ?? false) ? "Enabled" : "Disabled"}</span>
                   </label>
                 </div>
               </div>
@@ -739,11 +739,11 @@ function ConfigForm(props: {
                 <label class="toggle-switch">
                   <input
                     type="checkbox"
-                    checked={getNestedValue(formData(), "sidekick.enabled") as boolean ?? true}
+                    checked={getNestedValue(formData(), "sidekick.enabled") as boolean ?? false}
                     onChange={(e) => handleFieldChange("sidekick.enabled", e.currentTarget.checked)}
                   />
                   <span class="toggle-slider" />
-                  <span class="toggle-label">{(getNestedValue(formData(), "sidekick.enabled") as boolean ?? true) ? "Enabled" : "Disabled"}</span>
+                  <span class="toggle-label">{(getNestedValue(formData(), "sidekick.enabled") as boolean ?? false) ? "Enabled" : "Disabled"}</span>
                 </label>
               </div>
 

@@ -76,6 +76,7 @@ export function clearSession(db: Database, sessionId: string): void {
         db.prepare("DELETE FROM notes WHERE session_id = ? AND type = 'session'").run(sessionId);
         db.prepare("DELETE FROM recomp_compartments WHERE session_id = ?").run(sessionId);
         db.prepare("DELETE FROM recomp_facts WHERE session_id = ?").run(sessionId);
+        db.prepare("DELETE FROM user_memory_candidates WHERE session_id = ?").run(sessionId);
         clearIndexedMessages(db, sessionId);
     })();
 }

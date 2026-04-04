@@ -150,12 +150,13 @@ export function applyHeuristicCleanup(
 function extractToolInfo(
     part: Record<string, unknown>,
 ): { toolName: string; args: unknown } | null {
-    // OpenCode format: { type: "tool", state: { tool: "name", input: {...} } }
-    if (part.type === "tool" && typeof part.state === "object" && part.state !== null) {
-        const state = part.state as Record<string, unknown>;
-        if (typeof state.tool === "string" && DEDUP_SAFE_TOOLS.has(state.tool)) {
-            return { toolName: state.tool, args: state.input ?? {} };
-        }
+    // OpenCode format: { type: "tool", tool: "name", callID: "...", state: { input: {...}, output: "..." } }
+    if (part.type === "tool" && typeof part.tool === "string" && DEDUP_SAFE_TOOLS.has(part.tool)) {
+        const state =
+            typeof part.state === "object" && part.state !== null
+                ? (part.state as Record<string, unknown>)
+                : {};
+        return { toolName: part.tool, args: state.input ?? {} };
     }
     // Tool-invocation format: { type: "tool-invocation", toolName: "name", args: {...} }
     if (

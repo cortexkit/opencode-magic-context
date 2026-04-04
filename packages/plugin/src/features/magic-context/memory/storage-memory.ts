@@ -619,18 +619,17 @@ export function getMemoryCountsByStatus(db: Database, projectPath: string): Memo
     for (const row of rows) {
         counts.ids.push(row.id);
 
-        if (row.status === "active") {
+        // Count merged memories separately — they should not also count as archived
+        if (typeof row.superseded_by_memory_id === "number") {
+            counts.merged += 1;
+            counts.mergedIds.push(row.id);
+        } else if (row.status === "active") {
             counts.active += 1;
         } else if (row.status === "permanent") {
             counts.permanent += 1;
         } else {
             counts.archived += 1;
             counts.archivedIds.push(row.id);
-        }
-
-        if (typeof row.superseded_by_memory_id === "number") {
-            counts.merged += 1;
-            counts.mergedIds.push(row.id);
         }
     }
 

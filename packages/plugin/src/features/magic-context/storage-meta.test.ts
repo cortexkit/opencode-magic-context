@@ -83,7 +83,7 @@ describe("storage-meta", () => {
             //#then
             // 2 transactions: outer clearSession + nested clearIndexedMessages
             expect(db.transaction).toHaveBeenCalledTimes(2);
-            expect(db.prepare).toHaveBeenCalledTimes(12);
+            expect(db.prepare).toHaveBeenCalledTimes(13);
         });
     });
 });

@@ -21,7 +21,7 @@ import type { Database } from "bun:sqlite";
 
 export type MessageDirection = "server_to_tui" | "tui_to_server";
 
-export type MessageType = "toast" | "dialog_confirm" | "dialog_result" | "state_update";
+export type MessageType = "toast" | "dialog_confirm" | "dialog_result" | "state_update" | "action";
 
 export interface PluginMessage {
     id: number;
@@ -136,17 +136,23 @@ export function consumeMessages(
     }
 
     const query = `SELECT * FROM plugin_messages WHERE ${conditions.join(" AND ")} ORDER BY created_at ASC`;
-    const rows = db.prepare(query).all(...params);
-    const messages = rows.filter(isPluginMessageRow).map(toPluginMessage);
 
-    if (messages.length > 0) {
-        const ids = messages.map((m) => m.id);
-        db.prepare(
-            `UPDATE plugin_messages SET consumed_at = ? WHERE id IN (${ids.map(() => "?").join(",")})`,
-        ).run(now, ...ids);
-    }
+    // Atomic read+mark: transaction prevents TUI and server from consuming the same messages
+    const messages = db.transaction(() => {
+        const rows = db.prepare(query).all(...params);
+        const result = rows.filter(isPluginMessageRow).map(toPluginMessage);
 
-    // Periodic cleanup of old messages
+        if (result.length > 0) {
+            const ids = result.map((m) => m.id);
+            db.prepare(
+                `UPDATE plugin_messages SET consumed_at = ? WHERE id IN (${ids.map(() => "?").join(",")})`,
+            ).run(now, ...ids);
+        }
+
+        return result;
+    })();
+
+    // Periodic cleanup of old messages (outside transaction — non-critical)
     db.prepare("DELETE FROM plugin_messages WHERE created_at < ?").run(now - CLEANUP_THRESHOLD_MS);
 
     return messages;

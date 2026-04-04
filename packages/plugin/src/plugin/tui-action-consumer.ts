@@ -27,7 +27,7 @@ export function startTuiActionConsumer(args: {
     const timer = setInterval(() => {
         try {
             const db = openDatabase();
-            const actions = consumeMessages(db, "tui_to_server", { type: "action" as never });
+            const actions = consumeMessages(db, "tui_to_server", { type: "action" });
 
             for (const msg of actions) {
                 const command = msg.payload.command;
