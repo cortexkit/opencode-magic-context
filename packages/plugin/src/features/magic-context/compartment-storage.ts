@@ -424,6 +424,21 @@ export function promoteRecompStaging(
     })();
 }
 
+/**
+ * Clear memory_block_cache for ALL sessions so every active session
+ * re-renders its memory block on the next cache-busting pass.
+ * Called after ctx_memory write/delete mutations.
+ */
+export function invalidateAllMemoryBlockCaches(db: Database): void {
+    try {
+        db.prepare(
+            "UPDATE session_meta SET memory_block_cache = '' WHERE memory_block_cache != ''",
+        ).run();
+    } catch {
+        // Best-effort — session_meta may not exist in test environments
+    }
+}
+
 /** Clear staging tables for a session (on cancel/abandon or after successful promote). */
 export function clearRecompStaging(db: Database, sessionId: string): void {
     db.transaction(() => {

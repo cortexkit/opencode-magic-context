@@ -259,7 +259,8 @@ export function createEventHandler(deps: EventHandlerDeps) {
                     const contextLimit = resolveContextLimit(info.providerID, info.modelID, {
                         modelContextLimitsCache: deps.config.modelContextLimitsCache,
                     });
-                    const percentage = (totalInputTokens / contextLimit) * 100;
+                    const percentage =
+                        contextLimit > 0 ? (totalInputTokens / contextLimit) * 100 : 0;
 
                     sessionLog(
                         info.sessionID,

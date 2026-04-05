@@ -20,7 +20,6 @@ const upsertIndexStatements = new WeakMap<Database, PreparedStatement>();
 const deleteFtsStatements = new WeakMap<Database, PreparedStatement>();
 const deleteIndexStatements = new WeakMap<Database, PreparedStatement>();
 const countIndexedMessageStatements = new WeakMap<Database, PreparedStatement>();
-const deleteIndexedMessageStatements = new WeakMap<Database, PreparedStatement>();
 
 function normalizeIndexText(text: string): string {
     return text.replace(/\s+/g, " ").trim();
@@ -88,17 +87,6 @@ function getCountIndexedMessageStatement(db: Database): PreparedStatement {
     return stmt;
 }
 
-function getDeleteIndexedMessageStatement(db: Database): PreparedStatement {
-    let stmt = deleteIndexedMessageStatements.get(db);
-    if (!stmt) {
-        stmt = db.prepare(
-            "DELETE FROM message_history_fts WHERE session_id = ? AND message_id = ?",
-        );
-        deleteIndexedMessageStatements.set(db, stmt);
-    }
-    return stmt;
-}
-
 interface CountRow {
     count: number;
 }
@@ -111,11 +99,12 @@ function getLastIndexedOrdinal(db: Database, sessionId: string): number {
 export function deleteIndexedMessage(db: Database, sessionId: string, messageId: string): number {
     const row = getCountIndexedMessageStatement(db).get(sessionId, messageId) as CountRow | null;
     const count = typeof row?.count === "number" ? row.count : 0;
-    if (count > 0) {
-        getDeleteIndexedMessageStatement(db).run(sessionId, messageId);
-    }
 
-    getDeleteIndexStatement(db).run(sessionId);
+    // Full reindex on next search: ordinals are positional (not stable IDs), so removing
+    // a message shifts all subsequent ordinals. Keeping a stale tracker would cause
+    // ensureMessagesIndexed() to skip newly added messages when the count matches.
+    // Clearing both FTS rows and the tracker forces a complete rebuild on next search.
+    clearIndexedMessages(db, sessionId);
     return count;
 }
 

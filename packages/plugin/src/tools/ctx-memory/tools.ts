@@ -1,5 +1,6 @@
 import { type ToolDefinition, tool } from "@opencode-ai/plugin";
 import { DREAMER_AGENT } from "../../agents/dreamer";
+import { invalidateAllMemoryBlockCaches } from "../../features/magic-context/compartment-storage";
 import {
     archiveMemory,
     CATEGORY_PRIORITY,
@@ -261,6 +262,7 @@ function createCtxMemoryTool(deps: CtxMemoryToolDeps): ToolDefinition {
                     content,
                 });
 
+                invalidateAllMemoryBlockCaches(deps.db);
                 return `Saved memory [ID: ${memory.id}] in ${category}.`;
             }
 
@@ -275,6 +277,7 @@ function createCtxMemoryTool(deps: CtxMemoryToolDeps): ToolDefinition {
                 }
 
                 archiveMemory(deps.db, args.id);
+                invalidateAllMemoryBlockCaches(deps.db);
                 return `Archived memory [ID: ${args.id}].`;
             }
 
@@ -323,6 +326,7 @@ function createCtxMemoryTool(deps: CtxMemoryToolDeps): ToolDefinition {
                     content,
                 });
 
+                invalidateAllMemoryBlockCaches(deps.db);
                 return `Updated memory [ID: ${memory.id}] in ${memory.category}.`;
             }
 
@@ -455,6 +459,7 @@ function createCtxMemoryTool(deps: CtxMemoryToolDeps): ToolDefinition {
                     content,
                 });
 
+                invalidateAllMemoryBlockCaches(deps.db);
                 const supersededIds = sourceMemories
                     .map((memory) => memory.id)
                     .filter((id) => id !== canonicalMemory.id);
@@ -472,6 +477,7 @@ function createCtxMemoryTool(deps: CtxMemoryToolDeps): ToolDefinition {
                 }
 
                 archiveMemory(deps.db, args.id, args.reason);
+                invalidateAllMemoryBlockCaches(deps.db);
                 return args.reason?.trim()
                     ? `Archived memory [ID: ${args.id}] (${args.reason.trim()}).`
                     : `Archived memory [ID: ${args.id}].`;

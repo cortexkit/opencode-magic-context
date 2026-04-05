@@ -212,7 +212,7 @@ export default function SessionViewer() {
             Facts ({facts()?.length ?? 0})
           </button>
           <button class={`tab-pill ${activeTab() === "notes" ? "active" : ""}`} onClick={() => setActiveTab("notes")}>
-            Notes ({notes()?.length ?? 0})
+            Notes ({(notes()?.length ?? 0) + (smartNotes()?.length ?? 0)})
           </button>
           <button class={`tab-pill ${activeTab() === "meta" ? "active" : ""}`} onClick={() => setActiveTab("meta")}>
             Meta

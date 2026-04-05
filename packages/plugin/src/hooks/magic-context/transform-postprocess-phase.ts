@@ -20,7 +20,12 @@ import {
     type PreparedCompartmentInjection,
     renderCompartmentInjection,
 } from "./inject-compartments";
-import { getStickyNoteNudge, markNoteNudgeDelivered, peekNoteNudgeText } from "./note-nudger";
+import {
+    clearNoteNudgeState,
+    getStickyNoteNudge,
+    markNoteNudgeDelivered,
+    peekNoteNudgeText,
+} from "./note-nudger";
 import { reinjectNudgeAtAnchor } from "./nudge-injection";
 import type { NudgePlacementStore } from "./nudge-placement-store";
 import type { ContextNudge } from "./nudger";
@@ -393,30 +398,15 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
                 );
                 if (!reinjected) {
                     if (isCacheBustingPass) {
-                        // Anchor message gone (compacted/deleted) — re-anchor to latest visible user message.
-                        const newAnchorId = appendReminderToLatestUserMessage(
-                            args.messages,
-                            pendingUserTurnReminder.text,
+                        // Anchor message gone (compacted/deleted) — clear stale reminder.
+                        // A new reminder will only be created if a future tool-heavy turn
+                        // triggers createChatMessageHook; it is NOT auto-recreated from
+                        // pending drops alone.
+                        clearPersistedStickyTurnReminder(args.db, args.sessionId);
+                        sessionLog(
+                            args.sessionId,
+                            `sticky turn reminder cleared — anchor ${pendingUserTurnReminder.messageId} gone (compacted/deleted)`,
                         );
-                        if (newAnchorId) {
-                            setPersistedStickyTurnReminder(
-                                args.db,
-                                args.sessionId,
-                                pendingUserTurnReminder.text,
-                                newAnchorId,
-                            );
-                            sessionLog(
-                                args.sessionId,
-                                `sticky turn reminder re-anchored: ${pendingUserTurnReminder.messageId} → ${newAnchorId}`,
-                            );
-                        } else {
-                            // No user message visible at all — clear the stale reminder.
-                            clearPersistedStickyTurnReminder(args.db, args.sessionId);
-                            sessionLog(
-                                args.sessionId,
-                                `sticky turn reminder cleared — anchor ${pendingUserTurnReminder.messageId} gone and no user message visible`,
-                            );
-                        }
                     } else {
                         sessionLog(
                             args.sessionId,
@@ -495,28 +485,15 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
         );
         if (!reinjected) {
             if (isCacheBustingPass) {
-                // Anchor message gone (compacted/deleted) — re-anchor to latest visible user message.
-                const newAnchorId = appendReminderToLatestUserMessage(
-                    args.messages,
-                    stickyNoteNudge.text,
+                // Anchor message gone (compacted/deleted) — clear stale note nudge.
+                // A new nudge will only appear if another work boundary trigger fires
+                // (commit, historian, todo completion); it is NOT auto-recreated just
+                // because notes still exist.
+                clearNoteNudgeState(args.db, args.sessionId);
+                sessionLog(
+                    args.sessionId,
+                    `sticky note nudge cleared — anchor ${stickyNoteNudge.messageId} gone (compacted/deleted)`,
                 );
-                if (newAnchorId) {
-                    markNoteNudgeDelivered(
-                        args.db,
-                        args.sessionId,
-                        stickyNoteNudge.text,
-                        newAnchorId,
-                    );
-                    sessionLog(
-                        args.sessionId,
-                        `sticky note nudge re-anchored: ${stickyNoteNudge.messageId} → ${newAnchorId}`,
-                    );
-                } else {
-                    sessionLog(
-                        args.sessionId,
-                        `sticky note nudge anchor ${stickyNoteNudge.messageId} gone — no user message visible to re-anchor`,
-                    );
-                }
             } else {
                 sessionLog(
                     args.sessionId,

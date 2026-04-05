@@ -396,8 +396,11 @@ describe("createEventHandler", () => {
                 sessionId: "ses-removed",
             },
         ]);
+        // Full FTS reindex on next search: clearIndexedMessages wipes ALL FTS rows
+        // and the tracking row to avoid stale positional ordinals after removal.
+        // The "keep" message will be re-indexed on the next ctx_search call.
         expect(countIndexedMessages("ses-removed", "msg-removed")).toBe(0);
-        expect(countIndexedMessages("ses-removed", "msg-keep")).toBe(1);
+        expect(countIndexedMessages("ses-removed", "msg-keep")).toBe(0);
         expect(countMessageIndexRows("ses-removed")).toBe(0);
         expect(deps.tagger.cleanup).toHaveBeenCalledWith("ses-removed");
     });

@@ -23,7 +23,16 @@ fn trigger_dreamer(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
     let path = state.get_db_path()?;
     let conn = db::open_readwrite(&path).map_err(|e| e.to_string())?;
-    db::enqueue_dream(&conn, ".", "Manual trigger from dashboard tray")
+    // Resolve a real project identity from the memories table instead of using "."
+    // Include both active and permanent memories — a project with only permanent memories is still valid
+    let project_path: String = conn
+        .query_row(
+            "SELECT project_path FROM memories WHERE status IN ('active', 'permanent') GROUP BY project_path ORDER BY MAX(updated_at) DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| "No project found — write a memory first to enable dreamer from tray".to_string())?;
+    db::enqueue_dream(&conn, &project_path, "Manual trigger from dashboard tray")
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
