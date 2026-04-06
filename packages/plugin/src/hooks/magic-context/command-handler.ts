@@ -30,6 +30,14 @@ export interface CommandExecuteOutput {
 
 const SENTINEL_PREFIX = "__CONTEXT_MANAGEMENT_";
 
+/** Throw sentinel error to prevent OpenCode from forwarding the command to the LLM.
+ *  This works in TUI and Desktop. In web mode, the error surfaces as a failure in the
+ *  browser UI — that's an OpenCode limitation (no "handled" return path from
+ *  command.execute.before). Filed as a known issue. */
+function throwSentinel(command: string): never {
+    throw new Error(`${SENTINEL_PREFIX}${command.toUpperCase()}_HANDLED__`);
+}
+
 /**
  * Execute /ctx-aug: run sidekick to augment the user's prompt with relevant memories,
  * then send the augmented prompt as a real user message.
@@ -58,7 +66,7 @@ async function executeAugmentation(
             "## /ctx-aug\n\nSidekick is not configured. Add sidekick settings to `magic-context.jsonc` to use /ctx-aug.",
             {},
         );
-        throw new Error(`${SENTINEL_PREFIX}CTX-AUG_HANDLED__`);
+        throwSentinel("CTX-AUG");
     }
 
     const prompt = userPrompt.trim();
@@ -68,7 +76,7 @@ async function executeAugmentation(
             "## /ctx-aug\n\nUsage: `/ctx-aug <your prompt>`\n\nProvide a prompt to augment with project memory context.",
             {},
         );
-        throw new Error(`${SENTINEL_PREFIX}CTX-AUG_HANDLED__`);
+        throwSentinel("CTX-AUG");
     }
 
     // Step 1: Show "preparing" notification (hidden from LLM)
@@ -103,7 +111,7 @@ async function executeAugmentation(
     // Step 4: Send as a real user prompt (will be processed by the model)
     await sendUserPrompt(deps.sidekick.client, sessionId, augmentedPrompt);
 
-    throw new Error(`${SENTINEL_PREFIX}CTX-AUG_HANDLED__`);
+    throwSentinel("CTX-AUG");
 }
 
 function summarizeDreamResult(result: DreamRunResult): string {
@@ -156,14 +164,14 @@ async function executeDreaming(
             "## /ctx-dream\n\nDreaming is not configured for this project.",
             {},
         );
-        throw new Error(`${SENTINEL_PREFIX}CTX-DREAM_HANDLED__`);
+        throwSentinel("CTX-DREAM");
     }
 
     // dream_queue table is created in initializeDatabase() — no ensureDreamQueueTable needed
     const entry = enqueueDream(deps.db, deps.dreamer.projectPath, "manual");
     if (!entry) {
         await deps.sendNotification(sessionId, "Dream already queued for this project", {});
-        throw new Error(`${SENTINEL_PREFIX}CTX-DREAM_HANDLED__`);
+        throwSentinel("CTX-DREAM");
     }
 
     await deps.sendNotification(sessionId, "Starting dream run...", {});
@@ -187,7 +195,7 @@ async function executeDreaming(
             : "Dream queued, but another worker is already processing the queue.",
         {},
     );
-    throw new Error(`${SENTINEL_PREFIX}CTX-DREAM_HANDLED__`);
+    throwSentinel("CTX-DREAM");
 }
 
 export function createMagicContextCommandHandler(deps: {
@@ -328,12 +336,7 @@ export function createMagicContextCommandHandler(deps: {
             await deps.sendNotification(sessionId, result, {});
             sessionLog(sessionId, `command ${input.command} handled via command.execute.before`);
 
-            // OpenCode limitation: the command.execute.before hook has no "handled" return path.
-            // Throwing a sentinel exception is the only way to prevent OpenCode from continuing
-            // with normal command execution (which would send the command to the model).
-            // A typed result object or custom error class with an isSentinel flag would be cleaner,
-            // but requires an upstream API change. See audit finding #20.
-            throw new Error(`${SENTINEL_PREFIX}${input.command.toUpperCase()}_HANDLED__`);
+            throwSentinel(input.command);
         },
     };
 }

@@ -6,7 +6,7 @@ import type { BuiltinCommandConfig } from "./types";
 const TUI_OVERRIDE_COMMANDS = new Set(["ctx-status"]);
 
 export function getMagicContextBuiltinCommands(): BuiltinCommandConfig {
-    const isTui = (process.env.OPENCODE_CLIENT ?? "cli") === "cli";
+    const isTui = process.env.OPENCODE_CLIENT === "cli";
 
     const commands: BuiltinCommandConfig = {
         "ctx-status": {

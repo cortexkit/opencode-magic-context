@@ -65,7 +65,7 @@ export async function sendIgnoredMessage(
     params: NotificationParams,
 ): Promise<void> {
     // In TUI mode, show as toast instead of ignored message
-    const isTui = (process.env.OPENCODE_CLIENT ?? "cli") === "cli";
+    const isTui = process.env.OPENCODE_CLIENT === "cli";
     if (isTui) {
         try {
             const c = client as Record<string, unknown>;
