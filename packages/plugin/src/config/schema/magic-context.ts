@@ -115,6 +115,7 @@ export interface MagicContextConfig {
     execute_threshold_percentage: number | { default: number; [modelKey: string]: number };
     protected_tags: number;
     auto_drop_tool_age: number;
+    drop_tool_structure: boolean;
     clear_reasoning_age: number;
     iteration_nudge_threshold: number;
     compartment_token_budget: number;
@@ -179,6 +180,8 @@ export const MagicContextConfigSchema = z
         protected_tags: z.number().min(1).max(100).optional(),
         /** Auto-drop tool outputs older than N tags during queue execution (default: 100) */
         auto_drop_tool_age: z.number().min(10).default(100),
+        /** When true, dropped tool parts are fully removed instead of truncated in place (default: true) */
+        drop_tool_structure: z.boolean().default(true),
         /** Clear reasoning/thinking blocks older than N tags (default: 50) */
         clear_reasoning_age: z.number().min(10).default(50),
         /** Number of consecutive assistant messages without user input to trigger iteration nudge (default: 15) */

@@ -29,6 +29,12 @@ interface PersistedNoteNudgeRow {
     note_nudge_sticky_message_id: string;
 }
 
+interface PersistedHistorianFailureRow {
+    historian_failure_count: number;
+    historian_last_error: string | null;
+    historian_last_failure_at: number | null;
+}
+
 export interface PersistedStickyTurnReminder {
     text: string;
     messageId: string | null;
@@ -39,6 +45,12 @@ export interface PersistedNoteNudge {
     triggerMessageId: string | null;
     stickyText: string | null;
     stickyMessageId: string | null;
+}
+
+export interface PersistedHistorianFailureState {
+    failureCount: number;
+    lastError: string | null;
+    lastFailureAt: number | null;
 }
 
 function isPersistedUsageRow(row: unknown): row is PersistedUsageRow {
@@ -83,12 +95,30 @@ function isPersistedNoteNudgeRow(row: unknown): row is PersistedNoteNudgeRow {
     );
 }
 
+function isPersistedHistorianFailureRow(row: unknown): row is PersistedHistorianFailureRow {
+    if (row === null || typeof row !== "object") return false;
+    const r = row as Record<string, unknown>;
+    return (
+        typeof r.historian_failure_count === "number" &&
+        (typeof r.historian_last_error === "string" || r.historian_last_error === null) &&
+        (typeof r.historian_last_failure_at === "number" || r.historian_last_failure_at === null)
+    );
+}
+
 function getDefaultPersistedNoteNudge(): PersistedNoteNudge {
     return {
         triggerPending: false,
         triggerMessageId: null,
         stickyText: null,
         stickyMessageId: null,
+    };
+}
+
+function getDefaultHistorianFailureState(): PersistedHistorianFailureState {
+    return {
+        failureCount: 0,
+        lastError: null,
+        lastFailureAt: null,
     };
 }
 
@@ -297,6 +327,53 @@ export function clearPersistedNoteNudge(db: Database, sessionId: string): void {
     db.prepare(
         "UPDATE session_meta SET note_nudge_trigger_pending = 0, note_nudge_trigger_message_id = '', note_nudge_sticky_text = '', note_nudge_sticky_message_id = '' WHERE session_id = ?",
     ).run(sessionId);
+}
+
+export function getHistorianFailureState(
+    db: Database,
+    sessionId: string,
+): PersistedHistorianFailureState {
+    const result = db
+        .prepare(
+            "SELECT historian_failure_count, historian_last_error, historian_last_failure_at FROM session_meta WHERE session_id = ?",
+        )
+        .get(sessionId);
+
+    if (!isPersistedHistorianFailureRow(result)) {
+        return getDefaultHistorianFailureState();
+    }
+
+    return {
+        failureCount: result.historian_failure_count,
+        lastError:
+            typeof result.historian_last_error === "string" &&
+            result.historian_last_error.length > 0
+                ? result.historian_last_error
+                : null,
+        lastFailureAt:
+            typeof result.historian_last_failure_at === "number"
+                ? result.historian_last_failure_at
+                : null,
+    };
+}
+
+export function incrementHistorianFailure(db: Database, sessionId: string, error: string): void {
+    db.transaction(() => {
+        ensureSessionMetaRow(db, sessionId);
+        const current = getHistorianFailureState(db, sessionId);
+        db.prepare(
+            "UPDATE session_meta SET historian_failure_count = ?, historian_last_error = ?, historian_last_failure_at = ? WHERE session_id = ?",
+        ).run(current.failureCount + 1, error, Date.now(), sessionId);
+    })();
+}
+
+export function clearHistorianFailureState(db: Database, sessionId: string): void {
+    db.transaction(() => {
+        ensureSessionMetaRow(db, sessionId);
+        db.prepare(
+            "UPDATE session_meta SET historian_failure_count = 0, historian_last_error = NULL, historian_last_failure_at = NULL WHERE session_id = ?",
+        ).run(sessionId);
+    })();
 }
 
 // ── Compaction marker state ──

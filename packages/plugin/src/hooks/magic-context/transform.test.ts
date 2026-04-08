@@ -15,10 +15,12 @@ import type { Scheduler } from "../../features/magic-context/scheduler";
 import {
     clearPendingOps,
     closeDatabase,
+    getHistorianFailureState,
     getOrCreateSessionMeta,
     getPendingOps,
     getTagById,
     getTagsBySession,
+    incrementHistorianFailure,
     openDatabase,
     queuePendingOp,
     updateSessionMeta,
@@ -108,6 +110,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -160,6 +163,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -228,6 +232,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -286,6 +291,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         await baselineTransform(
             {},
@@ -348,6 +354,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -410,6 +417,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -462,6 +470,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -507,6 +516,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -522,8 +532,9 @@ describe("createTransform", () => {
         //#when
         await transform({}, { messages });
 
-        //#then
+        //#then — with dropToolStructure: true, tool parts are fully removed
         expect(messages).toHaveLength(1);
+        expect(messages[0]?.info.id).toBe("m-user");
         const tags = getTagsBySession(db, "ses-force-materialize");
         expect(tags.find((tag) => tag.type === "tool")?.status).toBe("dropped");
     });
@@ -550,6 +561,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -605,6 +617,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 10,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -653,6 +666,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const firstPass: TestMessage[] = [
@@ -717,6 +731,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const firstPass: TestMessage[] = [
@@ -781,6 +796,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const db = openDatabase();
@@ -932,6 +948,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const firstPass: TestMessage[] = [
@@ -990,6 +1007,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         // Simulate content that context-injector would have prepended before this transform runs
@@ -1034,6 +1052,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const messages: TestMessage[] = [
@@ -1098,6 +1117,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const firstPass: TestMessage[] = [
@@ -1165,6 +1185,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -1210,6 +1231,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -1252,6 +1274,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -1271,7 +1294,7 @@ describe("createTransform", () => {
         expect(text(messages[1], 0)).toContain(nudgeText);
     });
 
-    it("lazy-loads persisted usage from DB when contextUsageMap is empty", async () => {
+    it("resets persisted usage on first pass then lazy-loads on second pass", async () => {
         //#given
         useTempDataHome("context-transform-lazy-load-");
         const scheduler: Scheduler = { shouldExecute: mock(() => "defer" as const) };
@@ -1299,6 +1322,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
         const messages: TestMessage[] = [
             {
@@ -1311,15 +1335,25 @@ describe("createTransform", () => {
             },
         ];
 
-        //#when
+        //#when — first pass resets stale percentage to 0
         await transform({}, { messages });
 
-        //#then
-        expect(contextUsageMap.has("ses-lazy")).toBe(true);
-        const entry = contextUsageMap.get("ses-lazy");
-        expect(entry?.usage.percentage).toBe(50);
-        expect(entry?.usage.inputTokens).toBe(100_000);
-        expect(nudger).toHaveBeenCalledTimes(1);
+        //#then — first pass resets persisted usage; 0/0 is not cached in the map
+        // (loadPersistedUsage returns null for 0/0 values)
+        expect(contextUsageMap.has("ses-lazy")).toBe(false);
+
+        //#when — simulate message.updated setting real usage, then second pass loads it
+        contextUsageMap.delete("ses-lazy");
+        updateSessionMeta(db, "ses-lazy", {
+            lastContextPercentage: 50,
+            lastInputTokens: 100_000,
+        });
+        await transform({}, { messages });
+
+        //#then — second pass lazy-loads from DB
+        const entry2 = contextUsageMap.get("ses-lazy");
+        expect(entry2?.usage.percentage).toBe(50);
+        expect(entry2?.usage.inputTokens).toBe(100_000);
     });
 
     it("applies persisted drops even without contextUsageMap entry or persisted usage", async () => {
@@ -1342,6 +1376,7 @@ describe("createTransform", () => {
             clearReasoningAge: 50,
             protectedTags: 0,
             autoDropToolAge: 1000,
+            dropToolStructure: true,
         });
 
         const messages: TestMessage[] = [
@@ -1603,5 +1638,204 @@ describe("createTransform protected tail", () => {
 
         //#then
         expect(getOrCreateSessionMeta(db, "ses-pt-pending").compartmentInProgress).toBe(false);
+    });
+});
+
+describe("createTransform historian failure handling", () => {
+    it("aborts at 95% and only sends the emergency notification once per failure count", async () => {
+        useTempDataHome("transform-historian-emergency-");
+        createOpenCodeDbForTransform("ses-emergency", [
+            { id: "m-raw-1", role: "user", text: "recent 1" },
+            { id: "m-raw-2", role: "assistant", text: "recent 2" },
+            { id: "m-raw-3", role: "user", text: "recent 3" },
+        ]);
+        const db = openDatabase();
+        incrementHistorianFailure(db, "ses-emergency", "429 rate limit from historian provider");
+
+        const abort = mock(async () => ({}));
+        const prompt = mock(async () => ({}));
+        const transform = createTransform({
+            tagger: createTagger(),
+            scheduler: { shouldExecute: mock(() => "defer" as const) },
+            contextUsageMap: new Map([
+                [
+                    "ses-emergency",
+                    { usage: { percentage: 96, inputTokens: 192_000 }, updatedAt: Date.now() },
+                ],
+            ]),
+            nudger: () => null,
+            db,
+            nudgePlacements: createNudgePlacementStore(),
+            flushedSessions: new Set<string>(),
+            lastHeuristicsTurnId: new Map<string, string>(),
+            clearReasoningAge: 50,
+            protectedTags: 0,
+            autoDropToolAge: 1000,
+            client: { session: { abort, prompt } } as unknown as PluginContext["client"],
+            directory: "/tmp",
+        });
+
+        const firstPass: TestMessage[] = [
+            {
+                info: { id: "m-user-1", role: "user", sessionID: "ses-emergency" },
+                parts: [{ type: "text", text: "continue" }],
+            },
+            {
+                info: { id: "m-assistant-1", role: "assistant" },
+                parts: [{ type: "text", text: "ok" }],
+            },
+        ];
+        const secondPass: TestMessage[] = [
+            {
+                info: { id: "m-user-2", role: "user", sessionID: "ses-emergency" },
+                parts: [{ type: "text", text: "continue" }],
+            },
+            {
+                info: { id: "m-assistant-2", role: "assistant" },
+                parts: [{ type: "text", text: "ok" }],
+            },
+        ];
+        const thirdPass: TestMessage[] = [
+            {
+                info: { id: "m-user-3", role: "user", sessionID: "ses-emergency" },
+                parts: [{ type: "text", text: "continue" }],
+            },
+            {
+                info: { id: "m-assistant-3", role: "assistant" },
+                parts: [{ type: "text", text: "ok" }],
+            },
+        ];
+
+        await transform({}, { messages: firstPass });
+        await transform({}, { messages: secondPass });
+        incrementHistorianFailure(db, "ses-emergency", "503 overloaded");
+        await transform({}, { messages: thirdPass });
+
+        const emergencyNotifications = (
+            prompt.mock.calls as unknown as Array<
+                [{ body?: { noReply?: boolean; parts?: Array<{ text?: string }> } }]
+            >
+        )
+            .map((call) => call[0])
+            .filter(
+                (input) =>
+                    input.body?.noReply === true &&
+                    (input.body?.parts?.[0]?.text ?? "").includes("Context Emergency"),
+            );
+
+        expect(abort).toHaveBeenCalledTimes(3);
+        expect(emergencyNotifications).toHaveLength(2);
+        expect(emergencyNotifications[0]?.body?.parts?.[0]?.text).toContain("96.0%");
+        expect(emergencyNotifications[0]?.body?.parts?.[0]?.text).toContain(
+            "429 rate limit from historian provider",
+        );
+        expect(emergencyNotifications[1]?.body?.parts?.[0]?.text).toContain("503 overloaded");
+    });
+
+    it("starts historian recovery on the first transform pass after restart and clears failure state on success", async () => {
+        useTempDataHome("transform-historian-recovery-");
+        createOpenCodeDbForTransform("ses-recovery", [
+            { id: "m-1", role: "user", text: "eligible one" },
+            { id: "m-2", role: "assistant", text: "eligible two" },
+            { id: "m-3", role: "user", text: "protected 1" },
+            { id: "m-4", role: "user", text: "protected 2" },
+            { id: "m-5", role: "user", text: "protected 3" },
+            { id: "m-6", role: "user", text: "protected 4" },
+            { id: "m-7", role: "user", text: "protected 5" },
+        ]);
+        const db = openDatabase();
+        incrementHistorianFailure(db, "ses-recovery", "503 overloaded");
+
+        const createSession = mock(async () => ({ data: { id: "ses-recovery-child" } }));
+        const prompt = mock(async () => ({}));
+        const transform = createTransform({
+            tagger: createTagger(),
+            scheduler: { shouldExecute: mock(() => "defer" as const) },
+            contextUsageMap: new Map([
+                [
+                    "ses-recovery",
+                    { usage: { percentage: 70, inputTokens: 140_000 }, updatedAt: Date.now() },
+                ],
+            ]),
+            nudger: () => null,
+            db,
+            nudgePlacements: createNudgePlacementStore(),
+            flushedSessions: new Set<string>(),
+            lastHeuristicsTurnId: new Map<string, string>(),
+            clearReasoningAge: 50,
+            protectedTags: 0,
+            autoDropToolAge: 1000,
+            client: {
+                session: {
+                    get: mock(async () => ({ data: { directory: "/tmp/recovery" } })),
+                    create: createSession,
+                    prompt,
+                    messages: mock(async () => ({
+                        data: [
+                            {
+                                info: { role: "assistant", time: { created: 1 } },
+                                parts: [
+                                    {
+                                        type: "text",
+                                        text: `<compartment start="1" end="2" title="Recovered">Summary</compartment>`,
+                                    },
+                                ],
+                            },
+                        ],
+                    })),
+                    delete: mock(async () => ({})),
+                },
+            } as unknown as PluginContext["client"],
+            directory: "/tmp",
+        });
+
+        const firstPass: TestMessage[] = [
+            {
+                info: { id: "m-user-1", role: "user", sessionID: "ses-recovery" },
+                parts: [{ type: "text", text: "continue" }],
+            },
+            {
+                info: { id: "m-assistant-1", role: "assistant" },
+                parts: [{ type: "text", text: "ok" }],
+            },
+        ];
+        const secondPass: TestMessage[] = [
+            {
+                info: { id: "m-user-2", role: "user", sessionID: "ses-recovery" },
+                parts: [{ type: "text", text: "continue" }],
+            },
+            {
+                info: { id: "m-assistant-2", role: "assistant" },
+                parts: [{ type: "text", text: "ok" }],
+            },
+        ];
+
+        await transform({}, { messages: firstPass });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(createSession).toHaveBeenCalledTimes(1);
+        expect(
+            (
+                prompt.mock.calls as unknown as Array<
+                    [{ body?: { noReply?: boolean; parts?: Array<{ text?: string }> } }]
+                >
+            ).some((call) => {
+                const input = call[0];
+                return (
+                    input.body?.noReply === true &&
+                    (input.body?.parts?.[0]?.text ?? "").includes("Historian recovery")
+                );
+            }),
+        ).toBe(true);
+        expect(getHistorianFailureState(db, "ses-recovery")).toEqual({
+            failureCount: 0,
+            lastError: null,
+            lastFailureAt: null,
+        });
+
+        await transform({}, { messages: secondPass });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(createSession).toHaveBeenCalledTimes(1);
     });
 });

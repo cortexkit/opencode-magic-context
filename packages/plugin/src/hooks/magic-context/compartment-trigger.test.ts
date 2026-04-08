@@ -104,6 +104,7 @@ function makeSessionMeta(sessionId: string, lastContextPercentage: number): Sess
         compartmentInProgress: false,
         lastTransformError: null,
         systemPromptHash: "",
+        systemPromptTokens: 0,
         clearedReasoningThroughTag: 0,
     };
 }
@@ -194,6 +195,54 @@ describe("checkCompartmentTrigger", () => {
         );
 
         expect(result).toEqual({ shouldFire: false });
+    });
+
+    it("accounts for truncated tool stubs when dropToolStructure is false", () => {
+        useTempDataHome("compartment-trigger-truncated-tools-");
+        createOpenCodeDb("ses-truncated-tools", [
+            { id: "m-1", role: "user", text: "setup" },
+            { id: "m-2", role: "assistant", text: "done" },
+            { id: "m-3", role: "user", text: "a ".repeat(7000) },
+            { id: "m-4", role: "assistant", text: "b ".repeat(7000) },
+            { id: "m-5", role: "user", text: "protected tail 1" },
+            { id: "m-6", role: "user", text: "protected tail 2" },
+            { id: "m-7", role: "user", text: "protected tail 3" },
+            { id: "m-8", role: "user", text: "protected tail 4" },
+            { id: "m-9", role: "user", text: "protected tail 5" },
+        ]);
+        const db = openDatabase();
+        insertTag(db, "ses-truncated-tools", "call-1", "tool", 250, 1, 0, "read", 700);
+        insertTag(db, "ses-truncated-tools", "m-2", "message", 750, 2);
+
+        const fullDropResult = checkCompartmentTrigger(
+            db,
+            "ses-truncated-tools",
+            makeSessionMeta("ses-truncated-tools", 62),
+            { percentage: 63, inputTokens: 126_000 },
+            62,
+            65,
+            undefined,
+            0,
+            0,
+            undefined,
+            true,
+        );
+        const truncatedResult = checkCompartmentTrigger(
+            db,
+            "ses-truncated-tools",
+            makeSessionMeta("ses-truncated-tools", 62),
+            { percentage: 63, inputTokens: 126_000 },
+            62,
+            65,
+            undefined,
+            0,
+            0,
+            undefined,
+            false,
+        );
+
+        expect(fullDropResult).toEqual({ shouldFire: false });
+        expect(truncatedResult).toEqual({ shouldFire: true, reason: "projected_headroom" });
     });
 
     it("does not force-fire at 80% when pending drops are enough to bring usage below target", () => {

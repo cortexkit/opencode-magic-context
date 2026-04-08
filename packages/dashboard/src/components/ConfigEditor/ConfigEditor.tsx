@@ -57,12 +57,14 @@ interface FieldDef {
   options?: string[];
   description: string;
   section: string;
+  defaultValue?: boolean | number | string;
 }
 
 const FIELD_DEFS: FieldDef[] = [
   // General
   { key: "enabled", label: "Enabled", type: "boolean", description: "Enable the magic-context plugin", section: "General" },
   { key: "ctx_reduce_enabled", label: "Agent Controlled Reduction", type: "boolean", description: "Enable agent controlled reductions via ctx_reduce tool. When enabled, agent is prompted and nudged to choose what messages and tool calls to drop periodically. If disabled the system still works via auto drops based on message ages.", section: "General" },
+  { key: "drop_tool_structure", label: "Drop Tool Structure", type: "boolean", description: "When enabled, dropped tool calls are fully removed. When disabled, tool input/output is truncated in place so tool structure stays visible.", section: "General", defaultValue: false },
   // Thresholds
   // cache_ttl and execute_threshold_percentage are rendered as custom PerModelField components
   { key: "nudge_interval_tokens", label: "Nudge Interval (tokens)", type: "number", description: "Token interval between rolling ctx_reduce nudges.", section: "General" },
@@ -245,6 +247,11 @@ function ConfigForm(props: {
       const v = value();
       return v != null && typeof v === "object" && !Array.isArray(v);
     };
+    const booleanValue = () => {
+      const v = value();
+      if (typeof v === "boolean") return v;
+      return (field.defaultValue as boolean | undefined) ?? true;
+    };
     const isRangeSlider = field.type === "number" && RANGE_SLIDER_FIELDS.has(field.key) && !isObjectValue();
 
     return (
@@ -256,9 +263,9 @@ function ConfigForm(props: {
         <span class="config-field-desc">{field.description}</span>
         {field.type === "boolean" ? (
           <label class="toggle-switch">
-            <input type="checkbox" checked={value() as boolean ?? true} onChange={(e) => handleFieldChange(field.key, e.currentTarget.checked)} />
+            <input type="checkbox" checked={booleanValue()} onChange={(e) => handleFieldChange(field.key, e.currentTarget.checked)} />
             <span class="toggle-slider" />
-            <span class="toggle-label">{(value() as boolean ?? true) ? "Enabled" : "Disabled"}</span>
+            <span class="toggle-label">{booleanValue() ? "Enabled" : "Disabled"}</span>
           </label>
         ) : field.type === "select" ? (
           <select class="config-input" value={String(value() ?? "")} onChange={(e) => handleFieldChange(field.key, e.currentTarget.value)}>

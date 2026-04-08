@@ -47,6 +47,7 @@ function estimateProjectedPostDropPercentage(
     protectedTags?: number,
     clearReasoningAge?: number,
     clearedReasoningThroughTag?: number,
+    dropToolStructure = true,
 ): number | null {
     const activeTags = getTagsBySession(db, sessionId).filter((tag) => tag.status === "active");
     // Denominator must include both text/tool bytes and reasoning bytes to match the numerator
@@ -80,7 +81,7 @@ function estimateProjectedPostDropPercentage(
             if (pendingDropTagIds.has(tag.tagNumber)) continue;
             if (tag.tagNumber > protectedCutoff) continue;
             if (tag.type === "tool" && tag.tagNumber <= toolAgeCutoff) {
-                droppableBytes += tag.byteSize + tag.reasoningByteSize;
+                droppableBytes += estimateToolDropSavings(tag, dropToolStructure);
             }
         }
     }
@@ -104,6 +105,19 @@ function estimateProjectedPostDropPercentage(
 
     const dropRatio = Math.min(droppableBytes / totalActiveBytes, 1);
     return usage.percentage * (1 - dropRatio);
+}
+
+function estimateToolDropSavings(
+    tag: { byteSize: number; reasoningByteSize: number; inputByteSize: number },
+    dropToolStructure: boolean,
+): number {
+    const fullDropBytes = tag.byteSize + tag.reasoningByteSize;
+    if (dropToolStructure) {
+        return fullDropBytes;
+    }
+
+    const truncatedStubEstimate = tag.inputByteSize > 500 ? 100 : tag.inputByteSize + 50;
+    return Math.max(fullDropBytes - truncatedStubEstimate, 0);
 }
 
 interface TailInfo {
@@ -182,6 +196,7 @@ export function checkCompartmentTrigger(
     autoDropToolAge?: number,
     protectedTagCount?: number,
     clearReasoningAge?: number,
+    dropToolStructure = true,
     commitClusterTrigger?: { enabled: boolean; min_clusters: number },
 ): CompartmentTriggerResult {
     if (sessionMeta.compartmentInProgress) {
@@ -201,6 +216,7 @@ export function checkCompartmentTrigger(
         protectedTagCount,
         clearReasoningAge,
         sessionMeta.clearedReasoningThroughTag,
+        dropToolStructure,
     );
     const relativePostDropTarget = executeThresholdPercentage * POST_DROP_TARGET_RATIO;
 

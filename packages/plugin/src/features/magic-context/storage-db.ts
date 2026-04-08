@@ -221,6 +221,9 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
       last_input_tokens INTEGER DEFAULT 0,
       times_execute_threshold_reached INTEGER DEFAULT 0,
       compartment_in_progress INTEGER DEFAULT 0,
+      historian_failure_count INTEGER DEFAULT 0,
+      historian_last_error TEXT DEFAULT NULL,
+      historian_last_failure_at INTEGER DEFAULT NULL,
       system_prompt_hash TEXT DEFAULT '',
       memory_block_cache TEXT DEFAULT '',
       memory_block_count INTEGER DEFAULT 0
@@ -277,6 +280,9 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
     ensureColumn(db, "session_meta", "note_nudge_sticky_message_id", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "times_execute_threshold_reached", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "compartment_in_progress", "INTEGER DEFAULT 0");
+    ensureColumn(db, "session_meta", "historian_failure_count", "INTEGER DEFAULT 0");
+    ensureColumn(db, "session_meta", "historian_last_error", "TEXT DEFAULT NULL");
+    ensureColumn(db, "session_meta", "historian_last_failure_at", "INTEGER DEFAULT NULL");
     ensureColumn(db, "session_meta", "system_prompt_hash", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "cleared_reasoning_through_tag", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "stripped_placeholder_ids", "TEXT DEFAULT ''");
@@ -287,6 +293,9 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
     ensureColumn(db, "session_meta", "memory_block_count", "INTEGER DEFAULT 0");
     ensureColumn(db, "dream_queue", "retry_count", "INTEGER DEFAULT 0");
     ensureColumn(db, "tags", "reasoning_byte_size", "INTEGER DEFAULT 0");
+    ensureColumn(db, "tags", "drop_mode", "TEXT DEFAULT 'full'");
+    ensureColumn(db, "tags", "tool_name", "TEXT");
+    ensureColumn(db, "tags", "input_byte_size", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "system_prompt_tokens", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "compaction_marker_state", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "key_files", "TEXT DEFAULT ''");

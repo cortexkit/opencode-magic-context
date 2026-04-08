@@ -25,12 +25,17 @@ function createMockDb(options?: { failCounterWrite?: boolean; rollbackTransactio
                     byteSize: number,
                     _reasoningByteSize: number,
                     _tagNumber: number,
+                    toolName?: string | null,
+                    inputByteSize?: number,
                 ) => {
                     const tag: StoredTag = {
                         rowId: nextId++,
                         messageId,
                         type,
                         status: "active",
+                        dropMode: "full",
+                        toolName: toolName ?? null,
+                        inputByteSize: inputByteSize ?? 0,
                         byteSize,
                         reasoningByteSize: _reasoningByteSize ?? 0,
                         sessionId,
@@ -167,6 +172,21 @@ describe("createTagger", () => {
             //#then
             expect(msgTag).toBe(1);
             expect(toolTag).toBe(2); // unified counter, not separate namespaces
+        });
+
+        it("persists tool metadata when provided", () => {
+            //#given
+            const sessionId = "session-1";
+
+            //#when
+            tagger.assignTag(sessionId, "tool-1", "tool", 200, toDatabase(db), 0, "read", 321);
+
+            //#then
+            expect(db.tags[0]).toMatchObject({
+                dropMode: "full",
+                toolName: "read",
+                inputByteSize: 321,
+            });
         });
 
         it("wraps insert + counter upsert in a transaction", () => {

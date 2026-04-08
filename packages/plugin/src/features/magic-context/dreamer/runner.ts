@@ -123,30 +123,66 @@ async function getActiveProjectSessionIds(args: {
     projectIdentity: string;
     sessionDirectory: string | undefined;
 }): Promise<string[]> {
-    const listResponse = await args.client.session.list({
-        query: { directory: args.sessionDirectory ?? args.projectIdentity },
-    });
-    const sessions = shared.normalizeSDKResponse(listResponse, [] as SessionListEntry[], {
-        preferResponseOnMissingData: true,
-    });
-    const projectSessionIds = new Set(
-        sessions
-            .map((session) => (typeof session?.id === "string" ? session.id : null))
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
-    );
+    // Query OpenCode's DB directly for sessions matching this project identity.
+    // The SDK's session.list endpoint filters by directory/workspace which can miss sessions
+    // in different workspace contexts. Direct DB access finds ALL project sessions reliably.
+    try {
+        const { withReadOnlySessionDb } = await import(
+            "../../../hooks/magic-context/read-session-db"
+        );
+        const projectSessionIds = withReadOnlySessionDb((openCodeDb) => {
+            const rows = openCodeDb
+                .prepare(
+                    "SELECT id FROM session WHERE project_id = ? AND parent_id IS NULL ORDER BY time_updated DESC",
+                )
+                .all(args.projectIdentity) as Array<{ id: string }>;
+            return new Set(rows.map((r) => r.id));
+        });
 
-    if (projectSessionIds.size === 0) {
-        return [];
+        if (projectSessionIds.size === 0) {
+            return [];
+        }
+
+        // Intersect with our session_meta to filter to non-subagent sessions we know about
+        return args.db
+            .prepare(
+                "SELECT session_id AS sessionId FROM session_meta WHERE is_subagent = 0 ORDER BY session_id ASC",
+            )
+            .all()
+            .filter(isSessionIdRow)
+            .map((row) => row.sessionId)
+            .filter((sessionId) => projectSessionIds.has(sessionId));
+    } catch (error) {
+        // Fallback to SDK list if OpenCode DB is unavailable
+        shared.sessionLog(
+            args.projectIdentity,
+            `key-files: OpenCode DB lookup failed, falling back to SDK list: ${getErrorMessage(error)}`,
+        );
+        const listResponse = await args.client.session.list({
+            query: { directory: args.sessionDirectory ?? args.projectIdentity },
+        });
+        const sessions = shared.normalizeSDKResponse(listResponse, [] as SessionListEntry[], {
+            preferResponseOnMissingData: true,
+        });
+        const projectSessionIds = new Set(
+            sessions
+                .map((session) => (typeof session?.id === "string" ? session.id : null))
+                .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        );
+
+        if (projectSessionIds.size === 0) {
+            return [];
+        }
+
+        return args.db
+            .prepare(
+                "SELECT session_id AS sessionId FROM session_meta WHERE is_subagent = 0 ORDER BY session_id ASC",
+            )
+            .all()
+            .filter(isSessionIdRow)
+            .map((row) => row.sessionId)
+            .filter((sessionId) => projectSessionIds.has(sessionId));
     }
-
-    return args.db
-        .prepare(
-            "SELECT session_id AS sessionId FROM session_meta WHERE is_subagent = 0 ORDER BY session_id ASC",
-        )
-        .all()
-        .filter(isSessionIdRow)
-        .map((row) => row.sessionId)
-        .filter((sessionId) => projectSessionIds.has(sessionId));
 }
 
 async function identifyKeyFilesForSession(args: {
@@ -559,6 +595,7 @@ export async function runDream(args: {
         // ── User memory review phase ──
         // Runs after regular dream tasks, reviews user memory candidates for promotion.
         if (args.experimentalUserMemories?.enabled && Date.now() <= deadline) {
+            const umStart = Date.now();
             try {
                 const reviewResult = await reviewUserMemories({
                     db: args.db,
@@ -569,17 +606,27 @@ export async function runDream(args: {
                     deadline,
                     promotionThreshold: args.experimentalUserMemories.promotionThreshold,
                 });
+                const umOutput = `promoted=${reviewResult.promoted} merged=${reviewResult.merged} dismissed=${reviewResult.dismissed} consumed=${reviewResult.candidatesConsumed}`;
                 if (
                     reviewResult.promoted > 0 ||
                     reviewResult.merged > 0 ||
                     reviewResult.dismissed > 0
                 ) {
-                    log(
-                        `[dreamer] user-memories: promoted=${reviewResult.promoted} merged=${reviewResult.merged} dismissed=${reviewResult.dismissed} consumed=${reviewResult.candidatesConsumed}`,
-                    );
+                    log(`[dreamer] user-memories: ${umOutput}`);
                 }
+                result.tasks.push({
+                    name: "user memories",
+                    durationMs: Date.now() - umStart,
+                    result: umOutput,
+                });
             } catch (error) {
                 log(`[dreamer] user-memory review failed: ${getErrorMessage(error)}`);
+                result.tasks.push({
+                    name: "user memories",
+                    durationMs: Date.now() - umStart,
+                    result: "",
+                    error: getErrorMessage(error),
+                });
             }
         }
         // ── Smart note evaluation phase ──
@@ -602,6 +649,7 @@ export async function runDream(args: {
             }
         }
         if (args.experimentalPinKeyFiles?.enabled && Date.now() <= deadline) {
+            const kfStart = Date.now();
             try {
                 await identifyKeyFiles({
                     db: args.db,
@@ -613,8 +661,19 @@ export async function runDream(args: {
                     deadline,
                     config: args.experimentalPinKeyFiles,
                 });
+                result.tasks.push({
+                    name: "key files",
+                    durationMs: Date.now() - kfStart,
+                    result: "completed",
+                });
             } catch (error) {
                 log(`[key-files] identification phase failed: ${getErrorMessage(error)}`);
+                result.tasks.push({
+                    name: "key files",
+                    durationMs: Date.now() - kfStart,
+                    result: "",
+                    error: getErrorMessage(error),
+                });
             }
         }
     } finally {

@@ -1,11 +1,13 @@
 import type { createCompactionHandler } from "../../features/magic-context/compaction";
 import {
+    clearHistorianFailureState,
     clearPersistedNoteNudge,
     clearPersistedNudgePlacement,
     clearPersistedStickyTurnReminder,
     clearSession,
     deleteIndexedMessage,
     deleteTagsByMessageId,
+    getHistorianFailureState,
     getMaxTagNumberBySession,
     getOrCreateSessionMeta,
     getPersistedNoteNudge,
@@ -37,6 +39,7 @@ import {
 } from "./event-resolvers";
 import { clearNoteNudgeState } from "./note-nudger";
 import type { NudgePlacementStore } from "./transform";
+import { clearCompressorCooldown } from "./transform-compartment-phase";
 
 const CONTEXT_USAGE_TTL_MS = 60 * 60 * 1000;
 
@@ -57,9 +60,11 @@ export interface EventHandlerDeps {
     compactionHandler: ReturnType<typeof createCompactionHandler>;
     nudgePlacements: NudgePlacementStore;
     onSessionCacheInvalidated?: (sessionId: string) => void;
+    onSessionDeleted?: (sessionId: string) => void;
     config: {
         protected_tags: number;
         auto_drop_tool_age?: number;
+        drop_tool_structure?: boolean;
         clear_reasoning_age?: number;
         execute_threshold_percentage?: number | { default: number; [modelKey: string]: number };
         cache_ttl: CacheTtlConfig;
@@ -278,6 +283,15 @@ export function createEventHandler(deps: EventHandlerDeps) {
                     updates.lastContextPercentage = percentage;
                     updates.lastInputTokens = totalInputTokens;
 
+                    const historianFailureState = getHistorianFailureState(deps.db, info.sessionID);
+                    if (historianFailureState.failureCount > 0 && percentage < 90) {
+                        clearHistorianFailureState(deps.db, info.sessionID);
+                        sessionLog(
+                            info.sessionID,
+                            `event message.updated: cleared historian failure state at ${percentage.toFixed(1)}%`,
+                        );
+                    }
+
                     const sessionMeta = getOrCreateSessionMeta(deps.db, info.sessionID);
                     const previousPercentage = sessionMeta.lastContextPercentage;
                     if (!sessionMeta.isSubagent) {
@@ -296,6 +310,7 @@ export function createEventHandler(deps: EventHandlerDeps) {
                             deps.config.auto_drop_tool_age ?? 100,
                             deps.config.protected_tags,
                             deps.config.clear_reasoning_age ?? 50,
+                            deps.config.drop_tool_structure ?? true,
                             deps.config.commit_cluster_trigger,
                         );
 
@@ -428,8 +443,10 @@ export function createEventHandler(deps: EventHandlerDeps) {
                 sessionLog(sessionId, "event session.deleted persistence failed:", error);
             }
             deps.onSessionCacheInvalidated?.(sessionId);
+            deps.onSessionDeleted?.(sessionId);
             deps.contextUsageMap.delete(sessionId);
             deps.tagger.cleanup(sessionId);
+            clearCompressorCooldown(sessionId);
             return;
         }
     };

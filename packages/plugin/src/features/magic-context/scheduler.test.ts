@@ -21,6 +21,8 @@ function createSessionMeta(overrides: Partial<SessionMeta> = {}): SessionMeta {
         timesExecuteThresholdReached: 0,
         compartmentInProgress: false,
         systemPromptHash: "",
+        systemPromptTokens: 0,
+        clearedReasoningThroughTag: 0,
         ...overrides,
     };
 }

@@ -9,6 +9,8 @@ export interface Tagger {
         byteSize: number,
         db: Database,
         reasoningByteSize?: number,
+        toolName?: string | null,
+        inputByteSize?: number,
     ): number;
     getTag(sessionId: string, messageId: string): number | undefined;
     bindTag(sessionId: string, messageId: string, tagNumber: number): void;
@@ -78,6 +80,8 @@ export function createTagger(): Tagger {
         byteSize: number,
         db: Database,
         reasoningByteSize: number = 0,
+        toolName: string | null = null,
+        inputByteSize: number = 0,
     ): number {
         const sessionAssignments = getSessionAssignments(sessionId);
 
@@ -91,7 +95,17 @@ export function createTagger(): Tagger {
 
         try {
             db.transaction(() => {
-                insertTag(db, sessionId, messageId, type, byteSize, next, reasoningByteSize);
+                insertTag(
+                    db,
+                    sessionId,
+                    messageId,
+                    type,
+                    byteSize,
+                    next,
+                    reasoningByteSize,
+                    toolName,
+                    inputByteSize,
+                );
                 getUpsertCounterStatement(db).run(sessionId, next);
             })();
         } catch (error: unknown) {

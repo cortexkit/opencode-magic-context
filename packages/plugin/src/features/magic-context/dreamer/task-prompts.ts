@@ -112,7 +112,7 @@ export function buildArchiveStalePrompt(projectPath: string): string {
 **Project:** ${projectPath}
 
 ### Goal
-Find and archive memories that reference removed features, discontinued tools, old paths, or obsolete workflows.
+Find and archive memories that reference removed features, discontinued tools, old paths, obsolete workflows, or completed one-time instructions.
 
 ### Process
 
@@ -124,9 +124,12 @@ Find and archive memories that reference removed features, discontinued tools, o
    - References to features explicitly described as "removed" or "replaced"
    - References to config keys that no longer appear in the schema
    - Session-local context that has no ongoing value ("in this session", "earlier today")
+   - **Completed one-time instructions** in USER_DIRECTIVES — imperative directives like "Add X", "Create Y", "License as MIT", "Publish as Z" where the action has clearly been done (check the codebase to confirm completion)
+   - **Low-value implementation minutiae** in ARCHITECTURE_DECISIONS — single-line statements that merely restate what code does without explaining WHY or capturing a non-obvious constraint. Example: "Tag assignment uses one DB transaction" just restates code behavior — this belongs in source comments, not project memory. Keep memories that explain *why* a design choice was made, *what constraint* drove it, or *what would break* if it changed.
 3. **Verify each candidate** against the codebase before archiving:
    - Check if the file/tool/path actually exists
    - Check if the feature is mentioned in current code
+   - For USER_DIRECTIVES: verify the instructed action was completed (e.g., "License as MIT" → check LICENSE file exists)
    - If the reference is ambiguous, leave it alone
 4. **Archive** with \`ctx_memory(action="archive", id=N, reason="...")\`. Always include a specific reason.
 
@@ -136,14 +139,25 @@ Find and archive memories that reference removed features, discontinued tools, o
 - Discontinued workflows (e.g., "replay onto integrate branch")
 - Branch-era context ("on feat/context-management")
 - Stale config keys or defaults that changed
+- Completed setup/publishing/licensing instructions that are done and won't recur
+- Implementation details that simply restate code behavior without adding design rationale
 
-### What NOT to archive
-- USER_DIRECTIVES and USER_PREFERENCES — these reflect user intent, not codebase state
-- Architectural principles that are still conceptually valid even if implementation details changed
-- Memories you cannot verify because the referenced area is outside your search scope
+### USER_DIRECTIVES handling
+- **Archive** completed one-time instructions: "License as MIT", "Publish as @cortexkit/...", "Add changelog to releases", "For the README animation, emphasize X"
+- **Keep** ongoing preferences and behavioral rules: "Ask before changing behavior when audit finding is ambiguous", "Cache awareness is the highest-priority feature"
+- **Keep** workflow preferences that apply to future work: "Always use scripts/release.sh for releases"
+- Rule of thumb: if the directive uses imperative "do this" language and the action is done, archive it. If it describes how to behave going forward, keep it.
+
+### ARCHITECTURE_DECISIONS pruning
+- **Archive** memories that only restate what code does: "Function X calls Y", "Module A imports B"
+- **Keep** memories that explain constraints, tradeoffs, or non-obvious design reasoning: "X uses Y because Z would cause cache busts"
+- **Keep** memories that warn about gotchas: "Don't use cwd fallback because it causes cross-project contamination"
+- Rule of thumb: if removing the memory would cause someone to make a wrong design decision, keep it. If it's just restating navigable code structure, archive it — ARCHITECTURE.md covers that.
 
 ### Success criteria
 - No active memories reference non-existent files, tools, or paths.
+- No completed one-time instructions remain in USER_DIRECTIVES.
+- ARCHITECTURE_DECISIONS contains design reasoning, not code restatements.
 - Every archived memory has a specific reason.
 - Conservative — when in doubt, leave it active.`;
 }

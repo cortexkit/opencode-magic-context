@@ -60,6 +60,7 @@ export interface MagicContextDeps {
         ctx_reduce_enabled?: boolean;
         nudge_interval_tokens?: number;
         auto_drop_tool_age?: number;
+        drop_tool_structure?: boolean;
         clear_reasoning_age?: number;
         iteration_nudge_threshold?: number;
         execute_threshold_percentage?: number | { default: number; [modelKey: string]: number };
@@ -175,6 +176,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         nudgePlacements,
         protectedTags: deps.config.protected_tags,
         autoDropToolAge: deps.config.auto_drop_tool_age ?? 100,
+        dropToolStructure: deps.config.drop_tool_structure ?? true,
         clearReasoningAge: deps.config.clear_reasoning_age ?? 50,
         flushedSessions,
         lastHeuristicsTurnId,
@@ -198,9 +200,14 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             const model = liveModelBySession.get(sessionId);
             return resolveModelKey(model?.providerID, model?.modelID);
         },
+        getFallbackModelId: (sessionId) => {
+            const model = liveModelBySession.get(sessionId);
+            return model ? `${model.providerID}/${model.modelID}` : undefined;
+        },
         projectPath,
         experimentalCompactionMarkers: deps.config.experimental?.compaction_markers,
         experimentalUserMemories: deps.config.experimental?.user_memories?.enabled,
+        liveModelBySession,
     });
     const eventHandler = createEventHandler({
         contextUsageMap,
@@ -281,6 +288,10 @@ export function createMagicContextHook(deps: MagicContextDeps) {
                 historianTimeoutMs:
                     deps.config.historian_timeout_ms ?? DEFAULT_HISTORIAN_TIMEOUT_MS,
                 directory: deps.directory,
+                fallbackModelId: (() => {
+                    const model = liveModelBySession.get(sessionId);
+                    return model ? `${model.providerID}/${model.modelID}` : undefined;
+                })(),
                 getNotificationParams: () =>
                     getLiveNotificationParams(sessionId, liveModelBySession, variantBySession),
             }),
@@ -328,6 +339,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         db,
         protectedTags: deps.config.protected_tags,
         ctxReduceEnabled,
+        dropToolStructure: deps.config.drop_tool_structure ?? true,
         dreamerEnabled: deps.config.dreamer?.enabled === true,
         injectDocs: deps.config.dreamer?.inject_docs !== false,
         directory: deps.directory,

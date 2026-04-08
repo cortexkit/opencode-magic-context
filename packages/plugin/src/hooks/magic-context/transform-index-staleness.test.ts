@@ -65,6 +65,7 @@ function createTestTransform(sessionId: string) {
         clearReasoningAge: 2,
         protectedTags: 0,
         autoDropToolAge: 1000,
+        dropToolStructure: true,
     });
     return { transform, shouldExecute };
 }

@@ -144,6 +144,9 @@ describe("storage-db", () => {
           last_context_percentage REAL DEFAULT 0,
           last_input_tokens INTEGER DEFAULT 0,
           times_execute_threshold_reached INTEGER DEFAULT 0,
+          historian_failure_count INTEGER DEFAULT 0,
+          historian_last_error TEXT DEFAULT NULL,
+          historian_last_failure_at INTEGER DEFAULT NULL,
           cleared_reasoning_through_tag INTEGER DEFAULT 0
         );
       `);
@@ -154,7 +157,14 @@ describe("storage-db", () => {
                 name?: string;
             }>;
 
-            expect(columns.map((column) => column.name)).toContain("compartment_in_progress");
+            expect(columns.map((column) => column.name)).toEqual(
+                expect.arrayContaining([
+                    "compartment_in_progress",
+                    "historian_failure_count",
+                    "historian_last_error",
+                    "historian_last_failure_at",
+                ]),
+            );
         });
 
         it("#when an existing memory_embeddings table lacks model_id #then openDatabase adds the missing column", () => {

@@ -16,9 +16,10 @@ function getConfigDir(): string {
     const envDir = process.env.OPENCODE_CONFIG_DIR?.trim();
     if (envDir) return envDir;
 
+    // OpenCode uses ~/.config/opencode on all platforms (including Windows),
+    // not %APPDATA%. Match the runtime plugin's path resolution.
     if (process.platform === "win32") {
-        const appData = process.env.APPDATA || join(homedir(), "AppData", "Roaming");
-        return join(appData, "opencode");
+        return join(homedir(), ".config", "opencode");
     }
 
     const xdgConfig = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");

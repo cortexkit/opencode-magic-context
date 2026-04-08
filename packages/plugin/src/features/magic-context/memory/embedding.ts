@@ -178,6 +178,49 @@ export async function embedUnembeddedMemories(
     config: EmbeddingConfig,
     batchSize = 10,
 ): Promise<number> {
+    return embedUnembeddedMemoriesForProject(db, projectPath, config, batchSize);
+}
+
+/**
+ * Sweep ALL projects for unembedded memories, not just one project.
+ * Used by the dream timer to ensure cross-project embedding coverage.
+ */
+export async function embedAllUnembeddedMemories(
+    db: Database,
+    config: EmbeddingConfig,
+    batchSize = 10,
+): Promise<number> {
+    const resolvedConfig = resolveEmbeddingConfig(config);
+    if (resolvedConfig.provider === "off") return 0;
+
+    const projects = db
+        .prepare(
+            `SELECT DISTINCT m.project_path FROM memories m
+             WHERE m.status IN ('active', 'permanent')
+             AND m.id NOT IN (SELECT memory_id FROM memory_embeddings)
+             LIMIT 20`,
+        )
+        .all() as Array<{ project_path: string }>;
+
+    let total = 0;
+    for (const row of projects) {
+        const count = await embedUnembeddedMemoriesForProject(
+            db,
+            row.project_path,
+            config,
+            batchSize,
+        );
+        total += count;
+    }
+    return total;
+}
+
+async function embedUnembeddedMemoriesForProject(
+    db: Database,
+    projectPath: string,
+    config: EmbeddingConfig,
+    batchSize = 10,
+): Promise<number> {
     const normalizedBatchSize = Math.max(1, Math.floor(batchSize));
     const resolvedConfig = resolveEmbeddingConfig(config);
 

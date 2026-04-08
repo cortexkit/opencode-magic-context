@@ -8,13 +8,18 @@ describe("magic-context types", () => {
             messageId: "msg-abc",
             type: "message",
             status: "active",
+            dropMode: "full",
+            toolName: null,
+            inputByteSize: 0,
             byteSize: 512,
+            reasoningByteSize: 0,
             sessionId: "ses-xyz",
         };
 
         expect(entry.tagNumber).toBe(1);
         expect(entry.type).toBe("message");
         expect(entry.status).toBe("active");
+        expect(entry.dropMode).toBe("full");
     });
 
     it("TagEntry keeps dropped and compacted statuses", () => {
@@ -51,6 +56,9 @@ describe("magic-context types", () => {
             lastInputTokens: 0,
             timesExecuteThresholdReached: 0,
             compartmentInProgress: false,
+            systemPromptHash: "",
+            systemPromptTokens: 0,
+            clearedReasoningThroughTag: 0,
         };
 
         expect(meta.counter).toBe(0);

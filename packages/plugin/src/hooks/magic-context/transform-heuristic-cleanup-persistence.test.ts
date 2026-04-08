@@ -128,7 +128,7 @@ function makeTestDirectory(prefix: string): string {
 }
 
 describe("createTransform heuristic cleanup persistence", () => {
-    it("keeps execute-time heuristic cleanup persisted across a later defer pass", async () => {
+    it("keeps execute-time heuristic truncation on the execute pass before later defer replay", async () => {
         useTempDataHome("context-transform-heuristic-persist-");
         const testDirectory = makeTestDirectory("context-transform-heuristic-dir-");
 
@@ -152,6 +152,7 @@ describe("createTransform heuristic cleanup persistence", () => {
             clearReasoningAge: 50,
             protectedTags: 1,
             autoDropToolAge: 1,
+            dropToolStructure: true,
             client: undefined,
             directory: testDirectory,
             compartmentTokenBudget: 20_000,
@@ -164,6 +165,7 @@ describe("createTransform heuristic cleanup persistence", () => {
         const executePass = buildMessages();
         await transform({}, { messages: executePass });
 
+        // With dropToolStructure: true, tool parts are fully removed on execute pass
         expect(getMessage(executePass, "m-tool")).toBeUndefined();
         const executeInjection = getMessage(executePass, "m-injection");
         expect(executeInjection).toBeDefined();
@@ -204,6 +206,7 @@ describe("createTransform heuristic cleanup persistence", () => {
             clearReasoningAge: 50,
             protectedTags: 1,
             autoDropToolAge: 1,
+            dropToolStructure: true,
             client: undefined,
             directory: testDirectory,
             compartmentTokenBudget: 20_000,

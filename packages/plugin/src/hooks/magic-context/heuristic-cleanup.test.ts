@@ -14,6 +14,9 @@ function makeMemoryDatabase(): Database {
       message_id TEXT,
       type TEXT,
       status TEXT DEFAULT 'active',
+      drop_mode TEXT DEFAULT 'full',
+      tool_name TEXT,
+      input_byte_size INTEGER DEFAULT 0,
       byte_size INTEGER,
       tag_number INTEGER NOT NULL,
       reasoning_byte_size INTEGER NOT NULL DEFAULT 0,
@@ -39,6 +42,9 @@ function makeMemoryDatabase(): Database {
       last_input_tokens INTEGER DEFAULT 0,
       times_execute_threshold_reached INTEGER DEFAULT 0,
       compartment_in_progress INTEGER DEFAULT 0,
+      historian_failure_count INTEGER DEFAULT 0,
+      historian_last_error TEXT DEFAULT NULL,
+      historian_last_failure_at INTEGER DEFAULT NULL,
       system_prompt_hash INTEGER DEFAULT 0,
       system_prompt_tokens INTEGER DEFAULT 0,
       cleared_reasoning_through_tag INTEGER DEFAULT 0
@@ -64,6 +70,37 @@ function makeTarget(message: { parts: unknown[] }): TagTarget {
                 return "removed" as const;
             }
             return "absent" as const;
+        },
+        truncate: () => {
+            const toolPart = message.parts.find((p: any) => p.type === "tool") as
+                | {
+                      state?: {
+                          input?: Record<string, unknown>;
+                          output?: unknown;
+                      };
+                  }
+                | undefined;
+            if (!toolPart?.state) return "absent" as const;
+
+            toolPart.state.output = "[truncated]";
+            const inputSize = toolPart.state.input
+                ? JSON.stringify(toolPart.state.input).length
+                : 0;
+            if (toolPart.state.input && inputSize > 500) {
+                for (const key of Object.keys(toolPart.state.input)) {
+                    const value = toolPart.state.input[key];
+                    if (typeof value === "string") {
+                        toolPart.state.input[key] =
+                            value.length > 5 ? `${value.slice(0, 5)}...[truncated]` : value;
+                    } else if (Array.isArray(value)) {
+                        toolPart.state.input[key] = `[${value.length} items]`;
+                    } else if (value !== null && typeof value === "object") {
+                        toolPart.state.input[key] = "[object]";
+                    }
+                }
+            }
+
+            return "truncated" as const;
         },
     };
 }
@@ -117,6 +154,7 @@ describe("applyHeuristicCleanup", () => {
                 //#when — autoDropToolAge=5 means tags 1-5 are within age (maxTag=10, cutoff=10-5=5)
                 const result = applyHeuristicCleanup(SESSION, db, targets, new Map(), {
                     autoDropToolAge: 7,
+                    dropToolStructure: true,
                     protectedTags: 2,
                 });
 
@@ -125,6 +163,9 @@ describe("applyHeuristicCleanup", () => {
                 const tags = getTagsBySession(db, SESSION);
                 expect(tags.filter((t) => t.status === "dropped").length).toBe(3);
                 expect(tags.filter((t) => t.status === "active").length).toBe(7);
+                expect(
+                    tags.filter((t) => t.status === "dropped").every((t) => t.dropMode === "full"),
+                ).toBe(true);
             });
         });
     });
@@ -146,6 +187,7 @@ describe("applyHeuristicCleanup", () => {
                 //#when
                 applyHeuristicCleanup(SESSION, db, targets, buildMessageTagNumbers([[1, msg]]), {
                     autoDropToolAge: 100,
+                    dropToolStructure: true,
                     protectedTags: 0,
                 });
 
@@ -179,6 +221,7 @@ describe("applyHeuristicCleanup", () => {
                 //#when — protect last 3 tags (tags 3,4,5), autoDropToolAge=1 (cutoff=5-1=4)
                 const result = applyHeuristicCleanup(SESSION, db, targets, new Map(), {
                     autoDropToolAge: 1,
+                    dropToolStructure: true,
                     protectedTags: 3,
                 });
 
@@ -218,6 +261,7 @@ describe("applyHeuristicCleanup", () => {
                 //#when
                 const result = applyHeuristicCleanup(SESSION, db, targets, new Map(), {
                     autoDropToolAge: 5,
+                    dropToolStructure: true,
                     protectedTags: 1,
                 });
 
@@ -251,6 +295,7 @@ describe("applyHeuristicCleanup", () => {
                 //#when
                 const result = applyHeuristicCleanup(SESSION, db, targets, new Map(), {
                     autoDropToolAge: 100,
+                    dropToolStructure: true,
                     protectedTags: 2,
                     dropAllTools: true,
                 });
@@ -261,6 +306,103 @@ describe("applyHeuristicCleanup", () => {
                 expect(tags.filter((t) => t.status === "dropped").map((t) => t.tagNumber)).toEqual([
                     1, 2, 3,
                 ]);
+                expect(
+                    tags.filter((t) => t.status === "dropped").every((t) => t.dropMode === "full"),
+                ).toBe(true);
+            });
+        });
+    });
+
+    describe("#given old tool tags in truncation mode", () => {
+        describe("#when executing heuristic cleanup", () => {
+            it("#then keeps tool structure and truncates tool input/output in place", () => {
+                insertTag(db, SESSION, "msg-1", "tool", 1000, 1);
+                insertTag(db, SESSION, "msg-10", "message", 500, 10);
+
+                const msg = {
+                    parts: [
+                        {
+                            type: "tool",
+                            tool: "grep",
+                            state: {
+                                input: {
+                                    query: "abcdef",
+                                    short: "abc",
+                                    files: ["a", "b"],
+                                    metadata: { nested: true },
+                                    limit: 3,
+                                    exact: true,
+                                },
+                                output: "full output",
+                                status: "completed",
+                            },
+                        },
+                    ],
+                };
+                const targets = new Map<number, TagTarget>([[1, makeTarget(msg)]]);
+
+                const result = applyHeuristicCleanup(SESSION, db, targets, new Map(), {
+                    autoDropToolAge: 5,
+                    dropToolStructure: false,
+                    protectedTags: 0,
+                });
+
+                expect(result.droppedTools).toBe(1);
+                expect(msg.parts).toHaveLength(1);
+                expect(msg.parts[0] as Record<string, unknown>).toEqual({
+                    type: "tool",
+                    tool: "grep",
+                    state: {
+                        input: {
+                            query: "abcdef",
+                            short: "abc",
+                            files: ["a", "b"],
+                            metadata: { nested: true },
+                            limit: 3,
+                            exact: true,
+                        },
+                        output: "[truncated]",
+                        status: "completed",
+                    },
+                });
+                expect(
+                    getTagsBySession(db, SESSION).find((tag) => tag.tagNumber === 1)?.status,
+                ).toBe("dropped");
+                expect(
+                    getTagsBySession(db, SESSION).find((tag) => tag.tagNumber === 1)?.dropMode,
+                ).toBe("truncated");
+            });
+
+            it("#then fully removes tool parts when dropToolStructure is enabled", () => {
+                insertTag(db, SESSION, "msg-1", "tool", 1000, 1);
+                insertTag(db, SESSION, "msg-10", "message", 500, 10);
+
+                const msg = {
+                    parts: [
+                        {
+                            type: "tool",
+                            tool: "grep",
+                            state: {
+                                input: { query: "abcdef" },
+                                output: "full output",
+                                status: "completed",
+                            },
+                        },
+                    ],
+                };
+                const targets = new Map<number, TagTarget>([[1, makeTarget(msg)]]);
+
+                const result = applyHeuristicCleanup(SESSION, db, targets, new Map(), {
+                    autoDropToolAge: 5,
+                    dropToolStructure: true,
+                    protectedTags: 0,
+                });
+
+                expect(result.droppedTools).toBe(1);
+                expect(msg.parts).toHaveLength(0);
+                expect(
+                    getTagsBySession(db, SESSION).find((tag) => tag.tagNumber === 1)?.status,
+                ).toBe("dropped");
             });
         });
     });

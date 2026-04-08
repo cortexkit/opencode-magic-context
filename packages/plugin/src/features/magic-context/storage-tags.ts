@@ -5,6 +5,7 @@ type PreparedStatement = ReturnType<Database["prepare"]>;
 
 const insertTagStatements = new WeakMap<Database, PreparedStatement>();
 const updateTagStatusStatements = new WeakMap<Database, PreparedStatement>();
+const updateTagDropModeStatements = new WeakMap<Database, PreparedStatement>();
 const updateTagMessageIdStatements = new WeakMap<Database, PreparedStatement>();
 const getTagNumbersByMessageIdStatements = new WeakMap<Database, PreparedStatement>();
 const deleteTagsByMessageIdStatements = new WeakMap<Database, PreparedStatement>();
@@ -14,7 +15,7 @@ function getInsertTagStatement(db: Database): PreparedStatement {
     let stmt = insertTagStatements.get(db);
     if (!stmt) {
         stmt = db.prepare(
-            "INSERT INTO tags (session_id, message_id, type, byte_size, reasoning_byte_size, tag_number) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO tags (session_id, message_id, type, byte_size, reasoning_byte_size, tag_number, tool_name, input_byte_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         );
         insertTagStatements.set(db, stmt);
     }
@@ -26,6 +27,15 @@ function getUpdateTagStatusStatement(db: Database): PreparedStatement {
     if (!stmt) {
         stmt = db.prepare("UPDATE tags SET status = ? WHERE session_id = ? AND tag_number = ?");
         updateTagStatusStatements.set(db, stmt);
+    }
+    return stmt;
+}
+
+function getUpdateTagDropModeStatement(db: Database): PreparedStatement {
+    let stmt = updateTagDropModeStatements.get(db);
+    if (!stmt) {
+        stmt = db.prepare("UPDATE tags SET drop_mode = ? WHERE session_id = ? AND tag_number = ?");
+        updateTagDropModeStatements.set(db, stmt);
     }
     return stmt;
 }
@@ -77,6 +87,9 @@ interface TagRow {
     message_id: string;
     type: string;
     status: string;
+    drop_mode: string | null;
+    tool_name: string | null;
+    input_byte_size: number | null;
     byte_size: number;
     reasoning_byte_size: number;
     session_id: string;
@@ -115,6 +128,9 @@ function toTagEntry(row: TagRow): TagEntry {
         messageId: row.message_id,
         type,
         status,
+        dropMode: row.drop_mode === "truncated" ? "truncated" : "full",
+        toolName: row.tool_name ?? null,
+        inputByteSize: row.input_byte_size ?? 0,
         byteSize: row.byte_size,
         reasoningByteSize: row.reasoning_byte_size ?? 0,
         sessionId: row.session_id,
@@ -145,6 +161,8 @@ export function insertTag(
     byteSize: number,
     tagNumber: number,
     reasoningByteSize: number = 0,
+    toolName: string | null = null,
+    inputByteSize: number = 0,
 ): number {
     getInsertTagStatement(db).run(
         sessionId,
@@ -153,6 +171,8 @@ export function insertTag(
         byteSize,
         reasoningByteSize,
         tagNumber,
+        toolName,
+        inputByteSize,
     );
 
     return tagNumber;
@@ -165,6 +185,15 @@ export function updateTagStatus(
     status: TagEntry["status"],
 ): void {
     getUpdateTagStatusStatement(db).run(status, sessionId, tagId);
+}
+
+export function updateTagDropMode(
+    db: Database,
+    sessionId: string,
+    tagNumber: number,
+    dropMode: TagEntry["dropMode"],
+): void {
+    getUpdateTagDropModeStatement(db).run(dropMode, sessionId, tagNumber);
 }
 
 export function updateTagMessageId(
@@ -210,7 +239,7 @@ export function getMaxTagNumberBySession(db: Database, sessionId: string): numbe
 export function getTagsBySession(db: Database, sessionId: string): TagEntry[] {
     const rows = db
         .prepare(
-            "SELECT id, message_id, type, status, byte_size, reasoning_byte_size, session_id, tag_number FROM tags WHERE session_id = ? ORDER BY tag_number ASC, id ASC",
+            "SELECT id, message_id, type, status, drop_mode, tool_name, input_byte_size, byte_size, reasoning_byte_size, session_id, tag_number FROM tags WHERE session_id = ? ORDER BY tag_number ASC, id ASC",
         )
         .all(sessionId)
         .filter(isTagRow);
@@ -221,7 +250,7 @@ export function getTagsBySession(db: Database, sessionId: string): TagEntry[] {
 export function getTagById(db: Database, sessionId: string, tagId: number): TagEntry | null {
     const result = db
         .prepare(
-            "SELECT id, message_id, type, status, byte_size, reasoning_byte_size, session_id, tag_number FROM tags WHERE session_id = ? AND tag_number = ?",
+            "SELECT id, message_id, type, status, drop_mode, tool_name, input_byte_size, byte_size, reasoning_byte_size, session_id, tag_number FROM tags WHERE session_id = ? AND tag_number = ?",
         )
         .get(sessionId, tagId);
 
@@ -239,7 +268,7 @@ export function getTopNBySize(db: Database, sessionId: string, n: number): TagEn
 
     const rows = db
         .prepare(
-            "SELECT id, message_id, type, status, byte_size, reasoning_byte_size, session_id, tag_number FROM tags WHERE session_id = ? AND status = 'active' ORDER BY byte_size DESC, tag_number ASC LIMIT ?",
+            "SELECT id, message_id, type, status, drop_mode, tool_name, input_byte_size, byte_size, reasoning_byte_size, session_id, tag_number FROM tags WHERE session_id = ? AND status = 'active' ORDER BY byte_size DESC, tag_number ASC LIMIT ?",
         )
         .all(sessionId, n)
         .filter(isTagRow);

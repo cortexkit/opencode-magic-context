@@ -22,6 +22,12 @@ import {
 // These are written to /tmp and survive until manual cleanup or OS temp pruning.
 // The user has explicitly requested keeping these dumps for now (see audit #21).
 const HISTORIAN_RESPONSE_DUMP_DIR = join(tmpdir(), "magic-context-historian");
+const MAX_HISTORIAN_RETRIES = 2;
+
+interface HistorianModelOverride {
+    providerID: string;
+    modelID: string;
+}
 
 export async function runValidatedHistorianPass(args: {
     client: PluginContext["client"];
@@ -37,6 +43,7 @@ export async function runValidatedHistorianPass(args: {
     sequenceOffset: number;
     dumpLabelBase: string;
     timeoutMs?: number;
+    fallbackModelId?: string;
     callbacks?: HistorianProgressCallbacks;
 }): Promise<ValidatedHistorianPassResult> {
     const firstRun = await runHistorianPrompt({
@@ -44,7 +51,12 @@ export async function runValidatedHistorianPass(args: {
         dumpLabel: `${args.dumpLabelBase}-initial`,
     });
     if (!firstRun.ok || !firstRun.result) {
-        return { ok: false, error: firstRun.error ?? "historian run failed" };
+        return runFallbackHistorianPass({
+            ...args,
+            prompt: args.prompt,
+            error: firstRun.error ?? "historian run failed",
+            dumpPaths: [firstRun.dumpPath],
+        });
     }
 
     const firstValidation = validateHistorianOutput(
@@ -71,7 +83,12 @@ export async function runValidatedHistorianPass(args: {
         dumpLabel: `${args.dumpLabelBase}-repair`,
     });
     if (!repairRun.ok || !repairRun.result) {
-        return { ok: false, error: repairRun.error ?? "historian repair run failed" };
+        return runFallbackHistorianPass({
+            ...args,
+            prompt: repairPrompt,
+            error: repairRun.error ?? "historian repair run failed",
+            dumpPaths: [firstRun.dumpPath, repairRun.dumpPath],
+        });
     }
 
     const repairValidation = validateHistorianOutput(
@@ -82,11 +99,18 @@ export async function runValidatedHistorianPass(args: {
         args.sequenceOffset,
     );
     if (repairValidation.ok) {
-        cleanupHistorianDump(args.parentSessionId, firstRun.dumpPath);
+        // Keep firstRun.dumpPath (initial failure) for debugging.
+        // Only cleanup the successful repair run's dump.
         cleanupHistorianDump(args.parentSessionId, repairRun.dumpPath);
+        return repairValidation;
     }
 
-    return repairValidation;
+    return runFallbackHistorianPass({
+        ...args,
+        prompt: repairPrompt,
+        error: repairValidation.error ?? "invalid compartment output",
+        dumpPaths: [firstRun.dumpPath, repairRun.dumpPath],
+    });
 }
 
 async function runHistorianPrompt(args: {
@@ -96,11 +120,24 @@ async function runHistorianPrompt(args: {
     prompt: string;
     timeoutMs?: number;
     dumpLabel?: string;
+    modelOverride?: HistorianModelOverride;
 }): Promise<HistorianRunResult> {
-    const { client, parentSessionId, sessionDirectory, prompt, timeoutMs, dumpLabel } = args;
+    const {
+        client,
+        parentSessionId,
+        sessionDirectory,
+        prompt,
+        timeoutMs,
+        dumpLabel,
+        modelOverride,
+    } = args;
     let agentSessionId: string | null = null;
 
     try {
+        shared.sessionLog(
+            parentSessionId,
+            `historian: creating child session (model=${modelOverride ? `${modelOverride.providerID}/${modelOverride.modelID}` : `agent:${HISTORIAN_AGENT}`})`,
+        );
         const createResponse = await client.session.create({
             body: {
                 parentID: parentSessionId,
@@ -120,18 +157,49 @@ async function runHistorianPrompt(args: {
             return { ok: false, error: "Historian could not create its child session." };
         }
 
-        await shared.promptSyncWithModelSuggestionRetry(
-            client,
-            {
-                path: { id: agentSessionId },
-                query: { directory: sessionDirectory },
-                body: {
-                    agent: HISTORIAN_AGENT,
-                    parts: [{ type: "text", text: prompt }],
-                },
-            },
-            { timeoutMs: timeoutMs ?? DEFAULT_HISTORIAN_TIMEOUT_MS },
-        );
+        for (let retryIndex = 0; retryIndex <= MAX_HISTORIAN_RETRIES; retryIndex += 1) {
+            try {
+                await shared.promptSyncWithModelSuggestionRetry(
+                    client,
+                    {
+                        path: { id: agentSessionId },
+                        query: { directory: sessionDirectory },
+                        body: {
+                            // Always use the historian agent for its system prompt.
+                            // When modelOverride is set, OpenCode uses the override model
+                            // but still loads the historian agent's registered system prompt.
+                            agent: HISTORIAN_AGENT,
+                            ...(modelOverride ? { model: modelOverride } : {}),
+                            parts: [{ type: "text", text: prompt }],
+                        },
+                    },
+                    { timeoutMs: timeoutMs ?? DEFAULT_HISTORIAN_TIMEOUT_MS },
+                );
+                shared.sessionLog(
+                    parentSessionId,
+                    `historian: prompt completed (attempt ${retryIndex + 1}/${MAX_HISTORIAN_RETRIES + 1})`,
+                );
+                break;
+            } catch (error: unknown) {
+                const errorMsg = getErrorMessage(error);
+                shared.sessionLog(
+                    parentSessionId,
+                    `historian: prompt attempt ${retryIndex + 1} failed: ${errorMsg}`,
+                );
+                const shouldRetry =
+                    retryIndex < MAX_HISTORIAN_RETRIES && isTransientHistorianPromptError(errorMsg);
+                if (!shouldRetry) {
+                    throw error;
+                }
+
+                const backoffMs = getHistorianRetryBackoffMs(retryIndex);
+                shared.sessionLog(
+                    parentSessionId,
+                    `historian retry ${retryIndex + 1}/${MAX_HISTORIAN_RETRIES} after ${backoffMs}ms: ${errorMsg}`,
+                );
+                await sleep(backoffMs);
+            }
+        }
 
         const messagesResponse = await client.session.messages({
             path: { id: agentSessionId },
@@ -173,6 +241,119 @@ async function runHistorianPrompt(args: {
                 });
         }
     }
+}
+
+async function runFallbackHistorianPass(args: {
+    client: PluginContext["client"];
+    parentSessionId: string;
+    sessionDirectory: string;
+    prompt: string;
+    chunk: {
+        startIndex: number;
+        endIndex: number;
+        lines: Array<{ ordinal: number; messageId: string }>;
+    };
+    priorCompartments: StoredCompartmentRange[];
+    sequenceOffset: number;
+    dumpLabelBase: string;
+    timeoutMs?: number;
+    fallbackModelId?: string;
+    error: string;
+    dumpPaths: Array<string | undefined>;
+}): Promise<ValidatedHistorianPassResult> {
+    if (!args.fallbackModelId) {
+        return { ok: false, error: args.error };
+    }
+
+    const modelOverride = parseModelOverride(args.fallbackModelId);
+    if (!modelOverride) {
+        return { ok: false, error: args.error };
+    }
+
+    shared.sessionLog(
+        args.parentSessionId,
+        `compartment agent: retrying historian with primary session model ${args.fallbackModelId}`,
+    );
+
+    const fallbackRun = await runHistorianPrompt({
+        client: args.client,
+        parentSessionId: args.parentSessionId,
+        sessionDirectory: args.sessionDirectory,
+        prompt: args.prompt,
+        timeoutMs: args.timeoutMs,
+        dumpLabel: `${args.dumpLabelBase}-fallback-primary-model`,
+        modelOverride,
+    });
+    if (!fallbackRun.ok || !fallbackRun.result) {
+        return { ok: false, error: fallbackRun.error ?? args.error };
+    }
+
+    const fallbackValidation = validateHistorianOutput(
+        fallbackRun.result,
+        args.parentSessionId,
+        args.chunk,
+        args.priorCompartments,
+        args.sequenceOffset,
+    );
+    if (fallbackValidation.ok) {
+        // Only cleanup the successful fallback run's dump.
+        // Prior failed dumps (args.dumpPaths) are kept for debugging.
+        cleanupHistorianDump(args.parentSessionId, fallbackRun.dumpPath);
+    }
+
+    return fallbackValidation;
+}
+
+function parseModelOverride(modelId: string): HistorianModelOverride | null {
+    const [providerID, ...modelParts] = modelId.split("/");
+    const modelID = modelParts.join("/");
+    if (!providerID || modelID.length === 0) {
+        return null;
+    }
+
+    return { providerID, modelID };
+}
+
+function getHistorianRetryBackoffMs(retryIndex: number): number {
+    if (retryIndex === 0) {
+        return 2_000 + Math.floor(Math.random() * 1_001);
+    }
+
+    return 6_000 + Math.floor(Math.random() * 2_001);
+}
+
+function isTransientHistorianPromptError(message: string): boolean {
+    const normalized = message.toLowerCase();
+    if (
+        normalized.includes("invalid request") ||
+        normalized.includes("bad request") ||
+        normalized.includes("unauthorized") ||
+        normalized.includes("forbidden") ||
+        normalized.includes("authentication") ||
+        normalized.includes("auth") ||
+        normalized.includes(" 400") ||
+        normalized.startsWith("400")
+    ) {
+        return false;
+    }
+
+    return [
+        "429",
+        "rate limit",
+        "timeout",
+        "econnreset",
+        "etimedout",
+        "503",
+        "502",
+        "500",
+        "overloaded",
+    ].some((token) => normalized.includes(token));
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
 }
 
 function cleanupHistorianDump(sessionId: string, dumpPath?: string): void {

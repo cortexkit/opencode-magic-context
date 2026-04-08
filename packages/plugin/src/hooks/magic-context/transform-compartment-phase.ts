@@ -6,13 +6,30 @@ import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
 import { getActiveCompartmentRun, startCompartmentAgent } from "./compartment-runner";
 import { runCompressionPassIfNeeded } from "./compartment-runner-compressor";
-import { BLOCK_UNTIL_DONE_PERCENTAGE, FORCE_MATERIALIZE_PERCENTAGE } from "./compartment-trigger";
+import { BLOCK_UNTIL_DONE_PERCENTAGE } from "./compartment-trigger";
 import {
     type PreparedCompartmentInjection,
     prepareCompartmentInjection,
 } from "./inject-compartments";
 import { getProtectedTailStartOrdinal, getRawSessionMessageCount } from "./read-session-chunk";
+import { sendIgnoredMessage } from "./send-session-notification";
 import type { MessageLike } from "./transform-operations";
+
+const lastCompressorRunBySession = new Map<string, number>();
+
+function isCompressorOnCooldown(sessionId: string): boolean {
+    const lastRun = lastCompressorRunBySession.get(sessionId);
+    if (!lastRun) return false;
+    return Date.now() - lastRun < 600_000; // 10 minutes
+}
+
+function markCompressorRun(sessionId: string): void {
+    lastCompressorRunBySession.set(sessionId, Date.now());
+}
+
+export function clearCompressorCooldown(sessionId: string): void {
+    lastCompressorRunBySession.delete(sessionId);
+}
 
 interface RunCompartmentPhaseArgs {
     canRunCompartments: boolean;
@@ -29,11 +46,14 @@ interface RunCompartmentPhaseArgs {
     compartmentDirectory: string;
     messages: MessageLike[];
     pendingCompartmentInjection: PreparedCompartmentInjection | null;
+    fallbackModelId?: string;
     projectPath?: string;
     injectionBudgetTokens?: number;
     getNotificationParams?: () => import("./send-session-notification").NotificationParams;
     /** True when this pass is already cache-busting (flush or scheduler execute). */
     cacheAlreadyBusting?: boolean;
+    /** True when transform already triggered recovery/emergency historian work this pass. */
+    skipAwaitForThisPass?: boolean;
     /** When true, inject compaction markers into OpenCode's DB after historian publication */
     experimentalCompactionMarkers?: boolean;
     /** When true, extract user behavior observations from historian output */
@@ -71,9 +91,23 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
         return nextStart < cachedProtectedTailStart;
     }
 
-    async function awaitCompartmentRun(activeRun: Promise<void>, reason: string): Promise<void> {
+    async function awaitCompartmentRun(
+        activeRun: Promise<void>,
+        reason: string,
+    ): Promise<"completed" | "timed_out"> {
         sessionLog(args.sessionId, reason);
-        await activeRun;
+        const timeoutMs = args.historianTimeoutMs ?? 120_000; // 2 minutes default
+        const timeout = new Promise<"timeout">((resolve) =>
+            setTimeout(() => resolve("timeout"), timeoutMs),
+        );
+        const result = await Promise.race([activeRun.then(() => "done" as const), timeout]);
+        if (result === "timeout") {
+            sessionLog(
+                args.sessionId,
+                `transform: compartment await timed out after ${timeoutMs}ms — proceeding without waiting`,
+            );
+            return "timed_out";
+        }
         sessionLog(
             args.sessionId,
             "transform: compartment agent completed, refreshing compartment coverage",
@@ -86,6 +120,7 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
             args.projectPath,
             args.injectionBudgetTokens,
         );
+        return "completed";
     }
 
     if (
@@ -114,6 +149,7 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
                 historyBudgetTokens: args.historyBudgetTokens,
                 historianTimeoutMs: args.historianTimeoutMs,
                 directory: args.compartmentDirectory,
+                fallbackModelId: args.fallbackModelId,
                 getNotificationParams: args.getNotificationParams,
                 experimentalCompactionMarkers: args.experimentalCompactionMarkers,
                 experimentalUserMemories: args.experimentalUserMemories,
@@ -124,19 +160,16 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
 
     let awaitedCompartmentRun = false;
 
-    if (args.canRunCompartments && args.contextUsage.percentage >= FORCE_MATERIALIZE_PERCENTAGE) {
-        const activeRun = getActiveCompartmentRun(args.sessionId);
-        if (activeRun) {
-            await awaitCompartmentRun(
-                activeRun,
-                `transform: ${FORCE_MATERIALIZE_PERCENTAGE}% reached (${args.contextUsage.percentage.toFixed(1)}%), waiting for active compartment run before forcing materialization`,
-            );
-            awaitedCompartmentRun = true;
-            compartmentInProgress = false;
-        }
-    }
+    // At 85%, run aggressive heuristic cleanup (dropAllTools) but do NOT block
+    // the transform waiting for historian. Historian runs in the background.
+    // Blocking here freezes the session UI at "Thinking" with no LLM call.
+    // Only 95% (BLOCK_UNTIL_DONE_PERCENTAGE) should block.
 
-    if (args.canRunCompartments && args.contextUsage.percentage >= BLOCK_UNTIL_DONE_PERCENTAGE) {
+    if (
+        args.canRunCompartments &&
+        !args.skipAwaitForThisPass &&
+        args.contextUsage.percentage >= BLOCK_UNTIL_DONE_PERCENTAGE
+    ) {
         let activeRun = getActiveCompartmentRun(args.sessionId);
         if (!activeRun && hasEligibleHistoryForCompartment() && args.client) {
             sessionLog(
@@ -151,6 +184,7 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
                 historyBudgetTokens: args.historyBudgetTokens,
                 historianTimeoutMs: args.historianTimeoutMs,
                 directory: args.compartmentDirectory,
+                fallbackModelId: args.fallbackModelId,
                 getNotificationParams: args.getNotificationParams,
                 experimentalCompactionMarkers: args.experimentalCompactionMarkers,
                 experimentalUserMemories: args.experimentalUserMemories,
@@ -163,63 +197,86 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
             );
         }
         if (activeRun) {
-            await awaitCompartmentRun(
+            // Notify user before blocking — the session will appear frozen at "Thinking"
+            // while historian compacts. Without this, users have no idea what's happening.
+            if (args.client) {
+                const notifParams = args.getNotificationParams?.() ?? {};
+                void sendIgnoredMessage(
+                    args.client,
+                    args.sessionId,
+                    `⏳ Context at ${args.contextUsage.percentage.toFixed(0)}% — Magic Context is compacting history before continuing. This may take up to 2 minutes.`,
+                    notifParams,
+                );
+            }
+            const awaitResult = await awaitCompartmentRun(
                 activeRun,
                 `transform: blocking at ${args.contextUsage.percentage.toFixed(1)}% until compartment agent completes`,
             );
-            awaitedCompartmentRun = true;
-            compartmentInProgress = false;
+            if (awaitResult === "completed") {
+                awaitedCompartmentRun = true;
+                compartmentInProgress = false;
+            } else {
+                // Timeout: historian is still running in the background.
+                // Keep compartmentInProgress = true so future passes know the run is active.
+                // Do NOT set awaitedCompartmentRun — the run hasn't actually completed.
+                // The background run will publish when done, and the next pass picks it up.
+                sessionLog(
+                    args.sessionId,
+                    "transform: proceeding after 95% timeout — historian still running in background",
+                );
+            }
         }
     }
 
-    // ── Independent compressor check ──────────────────────────────────────
+    // ── Independent compressor check (non-blocking) ─────────────────────
     // The compressor normally runs after a successful historian publication.
     // But if historian hasn't fired (e.g., usage stayed low due to aggressive
     // heuristic cleanup from system-prompt flushes), the history block can
-    // exceed the budget indefinitely. Run the compressor independently when:
-    //   - cache is already busting (flush or scheduler execute) — never on
-    //     cache-stable passes, as the compressor rewrites message[0]
+    // exceed the budget indefinitely. Fire the compressor in the background
+    // (not awaited) so it never blocks the transform. The compressed result
+    // lands on the next cache-busting pass via clearInjectionCache.
+    //
+    // Conditions:
+    //   - cache is already busting (flush or scheduler execute)
     //   - budget is configured
     //   - client is available (compressor creates child sessions)
     //   - no historian is currently running
     //   - no historian ran this pass (compressor already fires post-historian)
+    //   - cooldown: at least 10 minutes since last independent compressor run
     if (
         args.cacheAlreadyBusting &&
         args.historyBudgetTokens &&
         args.historyBudgetTokens > 0 &&
         args.client &&
         !compartmentInProgress &&
-        !awaitedCompartmentRun
+        !awaitedCompartmentRun &&
+        !isCompressorOnCooldown(args.sessionId)
     ) {
-        try {
-            const compressed = await runCompressionPassIfNeeded({
-                client: args.client,
-                db: args.db,
-                sessionId: args.sessionId,
-                directory: args.compartmentDirectory,
-                historyBudgetTokens: args.historyBudgetTokens,
-                historianTimeoutMs: args.historianTimeoutMs,
-            });
-            // If compression rewrote compartments, refresh the injection so this
-            // pass renders the compressed history instead of the pre-compression block.
-            // clearInjectionCache was already called inside the compressor.
-            if (compressed && args.projectPath !== undefined) {
-                pendingCompartmentInjection = prepareCompartmentInjection(
-                    args.db,
+        // Fire-and-forget: compressor runs in background, results land on next bust pass
+        markCompressorRun(args.sessionId);
+        void runCompressionPassIfNeeded({
+            client: args.client,
+            db: args.db,
+            sessionId: args.sessionId,
+            directory: args.compartmentDirectory,
+            historyBudgetTokens: args.historyBudgetTokens,
+            historianTimeoutMs: args.historianTimeoutMs,
+        })
+            .then((compressed) => {
+                if (compressed) {
+                    sessionLog(
+                        args.sessionId,
+                        "independent compressor completed in background — compressed history will appear on next cache-busting pass",
+                    );
+                }
+            })
+            .catch((error: unknown) => {
+                sessionLog(
                     args.sessionId,
-                    args.messages,
-                    true, // force re-read — compressor just cleared the cache
-                    args.projectPath,
-                    args.injectionBudgetTokens,
+                    "independent compressor failed in background:",
+                    getErrorMessage(error),
                 );
-            }
-        } catch (error: unknown) {
-            sessionLog(
-                args.sessionId,
-                "transform: independent compressor check failed:",
-                getErrorMessage(error),
-            );
-        }
+            });
     }
 
     return { pendingCompartmentInjection, awaitedCompartmentRun, compartmentInProgress };

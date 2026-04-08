@@ -1,13 +1,16 @@
 import type { DreamerConfig, EmbeddingConfig } from "../config/schema/magic-context";
 import { checkScheduleAndEnqueue, processDreamQueue } from "../features/magic-context/dreamer";
-import { embedUnembeddedMemories } from "../features/magic-context/memory/embedding";
-import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
+import { embedAllUnembeddedMemories } from "../features/magic-context/memory/embedding";
 import { openDatabase } from "../features/magic-context/storage";
 import { log } from "../shared/logger";
 import type { PluginContext } from "./types";
 
 /** Check interval for dream schedule (15 minutes). */
 const DREAM_TIMER_INTERVAL_MS = 15 * 60 * 1000;
+
+/** Singleton guard — only one timer per process. */
+let activeTimer: ReturnType<typeof setInterval> | null = null;
+let activeCleanup: (() => void) | null = null;
 
 /**
  * Start an independent timer that checks the dreamer schedule and processes
@@ -29,9 +32,14 @@ export function startDreamScheduleTimer(args: {
         min_reads: number;
     };
 }): (() => void) | undefined {
+    // Singleton guard — only one timer per process
+    if (activeTimer) {
+        log("[dreamer] schedule timer already running, skipping duplicate start");
+        return activeCleanup ?? undefined;
+    }
+
     const {
         client,
-        directory,
         dreamerConfig,
         embeddingConfig,
         memoryEnabled,
@@ -45,16 +53,15 @@ export function startDreamScheduleTimer(args: {
         return;
     }
 
-    const projectPath = embeddingSweepEnabled ? resolveProjectIdentity(directory) : null;
-
     const timer = setInterval(() => {
+        log("[dreamer] timer tick — checking schedule and embeddings");
         try {
-            if (embeddingSweepEnabled && projectPath) {
-                void embedUnembeddedMemories(openDatabase(), projectPath, embeddingConfig)
+            if (embeddingSweepEnabled) {
+                void embedAllUnembeddedMemories(openDatabase(), embeddingConfig)
                     .then((embeddedCount) => {
                         if (embeddedCount > 0) {
                             log(
-                                `[magic-context] proactively embedded ${embeddedCount} ${embeddedCount === 1 ? "memory" : "memories"} for project ${projectPath}`,
+                                `[magic-context] proactively embedded ${embeddedCount} ${embeddedCount === 1 ? "memory" : "memories"} across all projects`,
                             );
                         }
                     })
@@ -64,10 +71,12 @@ export function startDreamScheduleTimer(args: {
             }
 
             if (!dreamingEnabled || !dreamerConfig?.schedule?.trim()) {
+                log("[dreamer] timer tick — dreaming disabled, skipping schedule check");
                 return;
             }
 
             const db = openDatabase();
+            log(`[dreamer] timer tick — checking schedule window "${dreamerConfig.schedule}"`);
             checkScheduleAndEnqueue(db, dreamerConfig.schedule);
 
             void processDreamQueue({
@@ -91,12 +100,19 @@ export function startDreamScheduleTimer(args: {
         timer.unref();
     }
 
+    const cleanup = () => {
+        clearInterval(timer);
+        activeTimer = null;
+        activeCleanup = null;
+        log("[dreamer] stopped dream schedule timer");
+    };
+
+    activeTimer = timer;
+    activeCleanup = cleanup;
+
     log(
         `[dreamer] started independent schedule timer (every ${DREAM_TIMER_INTERVAL_MS / 60_000}m)`,
     );
 
-    return () => {
-        clearInterval(timer);
-        log("[dreamer] stopped dream schedule timer");
-    };
+    return cleanup;
 }

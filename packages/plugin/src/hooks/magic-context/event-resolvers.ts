@@ -1,6 +1,6 @@
-import { isAnthropicProvider } from "../is-anthropic-provider";
+import { getModelsDevContextLimit } from "../../shared/models-dev-cache";
 
-const DEFAULT_CONTEXT_LIMIT = 200_000;
+const DEFAULT_CONTEXT_LIMIT = 128_000;
 
 type CacheTtlConfig = string | Record<string, string>;
 
@@ -15,7 +15,7 @@ export function resolveContextLimit(
         return DEFAULT_CONTEXT_LIMIT;
     }
 
-    // Check model-specific cache first (populated from user provider config)
+    // 1. Check user-configured model-specific limits first (highest priority)
     if (modelID) {
         const modelSpecific = config.modelContextLimitsCache?.get(`${providerID}/${modelID}`);
         if (typeof modelSpecific === "number" && modelSpecific > 0) {
@@ -23,13 +23,17 @@ export function resolveContextLimit(
         }
     }
 
-    // Anthropic models default to 1M context since Anthropic removed the beta requirement.
-    // The plugin config hook does not receive models.dev data, so we cannot read the
-    // snapshot limit here. 1M is correct for all current Anthropic models.
-    if (isAnthropicProvider(providerID)) {
-        return 1_000_000;
+    // 2. Check OpenCode's models.dev cache for accurate per-model limits.
+    // This file is maintained by OpenCode at ~/.cache/opencode/models.json
+    // and contains limit.context for every known provider/model combination.
+    if (modelID) {
+        const modelsDevLimit = getModelsDevContextLimit(providerID, modelID);
+        if (modelsDevLimit !== undefined) {
+            return modelsDevLimit;
+        }
     }
 
+    // 3. Conservative default for models not found in models.dev
     return DEFAULT_CONTEXT_LIMIT;
 }
 

@@ -1,4 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { homedir, platform, tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse, stringify } from "comment-json";
 import { detectConflicts } from "../shared/conflict-detector";
 import { fixConflicts } from "../shared/conflict-fixer";
@@ -9,6 +12,98 @@ import { intro, log, outro } from "./prompts";
 
 const PLUGIN_NAME = "@cortexkit/opencode-magic-context";
 const PLUGIN_ENTRY_WITH_VERSION = `${PLUGIN_NAME}@latest`;
+
+/**
+ * Resolve OpenCode's XDG-based cache directory.
+ * OpenCode uses `xdg-basedir` which resolves to:
+ * - macOS/Linux: $XDG_CACHE_HOME or ~/.cache
+ * - Windows: $XDG_CACHE_HOME or %LOCALAPPDATA%
+ * Plugin cache lives at <cacheDir>/opencode/packages/<pkg>/
+ */
+function getOpenCodeCacheDir(): string {
+    const xdgCache = process.env.XDG_CACHE_HOME;
+    if (xdgCache) return join(xdgCache, "opencode");
+
+    const os = platform();
+    if (os === "win32") {
+        const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
+        return join(localAppData, "opencode");
+    }
+    // macOS + Linux
+    return join(homedir(), ".cache", "opencode");
+}
+
+async function clearPluginCache(): Promise<{
+    action: "cleared" | "up_to_date" | "not_found" | "error";
+    path: string;
+    cached?: string;
+    latest?: string;
+    error?: string;
+}> {
+    const cacheDir = getOpenCodeCacheDir();
+    const pluginCacheDir = join(cacheDir, "packages", PLUGIN_ENTRY_WITH_VERSION);
+
+    if (!existsSync(pluginCacheDir)) {
+        return { action: "not_found", path: pluginCacheDir };
+    }
+
+    // Read cached version from the installed package.json (more reliable than package-lock.json)
+    let cachedVersion: string | undefined;
+    try {
+        const installedPkgPath = join(
+            pluginCacheDir,
+            "node_modules",
+            "@cortexkit",
+            "opencode-magic-context",
+            "package.json",
+        );
+        if (existsSync(installedPkgPath)) {
+            const pkg = JSON.parse(readFileSync(installedPkgPath, "utf-8"));
+            if (typeof pkg?.version === "string") {
+                cachedVersion = pkg.version;
+            }
+        }
+    } catch {
+        // Can't read cached version — proceed with clearing
+    }
+
+    // Compare against our own version — when running via `bunx @cortexkit/opencode-magic-context@latest doctor`,
+    // our package.json IS the latest published version. No network call needed.
+    // Try multiple relative paths to handle both src/ and dist/ build output locations.
+    const require = createRequire(import.meta.url);
+    let selfVersion: string | undefined;
+    for (const relPath of ["../../package.json", "../package.json"]) {
+        try {
+            selfVersion = (require(relPath) as { version?: string }).version;
+            if (selfVersion) break;
+        } catch {
+            // Try next path
+        }
+    }
+
+    // If we know both versions and they match, skip
+    if (cachedVersion && cachedVersion === selfVersion) {
+        return {
+            action: "up_to_date",
+            path: pluginCacheDir,
+            cached: cachedVersion,
+            latest: selfVersion,
+        };
+    }
+
+    try {
+        rmSync(pluginCacheDir, { recursive: true, force: true });
+        return {
+            action: "cleared",
+            path: pluginCacheDir,
+            cached: cachedVersion,
+            latest: selfVersion,
+        };
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { action: "error", path: pluginCacheDir, error: msg };
+    }
+}
 
 export async function runDoctor(): Promise<number> {
     intro("Magic Context Doctor");
@@ -133,7 +228,64 @@ export async function runDoctor(): Promise<number> {
         }
     }
 
-    // 8. Check OMO config
+    // 8. Check plugin npm cache — clear only if outdated
+    const cacheResult = await clearPluginCache();
+    if (cacheResult.action === "cleared") {
+        const versionInfo = cacheResult.cached
+            ? ` (cached: ${cacheResult.cached}${cacheResult.latest ? `, latest: ${cacheResult.latest}` : ""})`
+            : "";
+        log.success(
+            `Cleared outdated plugin cache${versionInfo} — latest will download on restart`,
+        );
+        log.info(`  ${cacheResult.path}`);
+        fixed++;
+    } else if (cacheResult.action === "up_to_date") {
+        log.success(`Plugin cache up to date (v${cacheResult.cached})`);
+    } else if (cacheResult.action === "error") {
+        log.warn(`Could not clear plugin cache: ${cacheResult.error}`);
+        log.info(`  Manually delete: ${cacheResult.path}`);
+        issues++;
+    } else {
+        log.success("Plugin cache clean (no cached version found)");
+    }
+
+    // 9. Show diagnostics info (log file, historian dumps)
+    const logPath = join(tmpdir(), "magic-context.log");
+    if (existsSync(logPath)) {
+        const logStat = statSync(logPath);
+        const sizeKb = (logStat.size / 1024).toFixed(0);
+        log.info(`Log file: ${logPath} (${sizeKb} KB)`);
+    } else {
+        log.info(`Log file: ${logPath} (not yet created)`);
+    }
+
+    const historianDumpDir = join(tmpdir(), "magic-context-historian");
+    if (existsSync(historianDumpDir)) {
+        try {
+            const dumps = readdirSync(historianDumpDir)
+                .filter((f) => f.endsWith(".xml"))
+                .map((f) => ({
+                    name: f,
+                    mtime: statSync(join(historianDumpDir, f)).mtimeMs,
+                }))
+                .sort((a, b) => b.mtime - a.mtime);
+            if (dumps.length > 0) {
+                log.warn(`Historian debug dumps: ${dumps.length} file(s) in ${historianDumpDir}`);
+                for (const dump of dumps.slice(0, 3)) {
+                    const age = Math.round((Date.now() - dump.mtime) / 60000);
+                    const ageStr = age < 60 ? `${age}m ago` : `${Math.round(age / 60)}h ago`;
+                    log.info(`  ${dump.name} (${ageStr})`);
+                }
+                if (dumps.length > 3) {
+                    log.info(`  ... and ${dumps.length - 3} more`);
+                }
+            }
+        } catch {
+            // Can't read dump directory — skip
+        }
+    }
+
+    // 10. Check OMO config
     if (paths.omoConfig) {
         log.info(`OMO config found: ${paths.omoConfig}`);
     }

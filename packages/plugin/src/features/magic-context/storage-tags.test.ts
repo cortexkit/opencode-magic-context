@@ -7,6 +7,7 @@ import {
     getTagsBySession,
     getTopNBySize,
     insertTag,
+    updateTagDropMode,
     updateTagStatus,
 } from "./storage-tags";
 
@@ -21,6 +22,9 @@ function makeMemoryDatabase(): Database {
       message_id TEXT,
       type TEXT,
       status TEXT DEFAULT 'active',
+      drop_mode TEXT DEFAULT 'full',
+      tool_name TEXT,
+      input_byte_size INTEGER DEFAULT 0,
       byte_size INTEGER,
       tag_number INTEGER NOT NULL,
       reasoning_byte_size INTEGER NOT NULL DEFAULT 0,
@@ -46,6 +50,9 @@ function makeMemoryDatabase(): Database {
       last_input_tokens INTEGER DEFAULT 0,
       times_execute_threshold_reached INTEGER DEFAULT 0,
       compartment_in_progress INTEGER DEFAULT 0,
+      historian_failure_count INTEGER DEFAULT 0,
+      historian_last_error TEXT DEFAULT NULL,
+      historian_last_failure_at INTEGER DEFAULT NULL,
       system_prompt_hash INTEGER DEFAULT 0,
       system_prompt_tokens INTEGER DEFAULT 0,
       cleared_reasoning_through_tag INTEGER DEFAULT 0
@@ -101,6 +108,9 @@ describe("storage-tags", () => {
             expect(tags).toHaveLength(2);
             expect(tags[0].messageId).toBe("msg-1");
             expect(tags[0].type).toBe("message");
+            expect(tags[0].dropMode).toBe("full");
+            expect(tags[0].toolName).toBeNull();
+            expect(tags[0].inputByteSize).toBe(0);
             expect(tags[1].messageId).toBe("msg-2");
             expect(tags[1].type).toBe("tool");
         });
@@ -253,6 +263,29 @@ describe("storage-tags", () => {
             const d = tags.find((t) => t.tagNumber === id2);
             expect(s?.status).toBe("compacted");
             expect(d?.status).toBe("dropped");
+        });
+
+        it("#when drop_mode is NULL #then normalizes to full", () => {
+            db = makeMemoryDatabase();
+            db.prepare(
+                "INSERT INTO tags (session_id, message_id, type, status, drop_mode, byte_size, tag_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ).run("ses-1", "msg-1", "tool", "dropped", null, 100, 1);
+
+            const tag = getTagById(db, "ses-1", 1);
+
+            expect(tag?.dropMode).toBe("full");
+        });
+
+        it("#when tool metadata is stored #then returns toolName and inputByteSize", () => {
+            db = makeMemoryDatabase();
+            insertTag(db, "ses-1", "call-1", "tool", 100, 1, 0, "read", 321);
+            updateTagDropMode(db, "ses-1", 1, "truncated");
+
+            const tag = getTagById(db, "ses-1", 1);
+
+            expect(tag?.dropMode).toBe("truncated");
+            expect(tag?.toolName).toBe("read");
+            expect(tag?.inputByteSize).toBe(321);
         });
     });
 });

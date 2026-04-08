@@ -100,6 +100,8 @@ export function getRawSessionTagKeysThrough(sessionId: string, upToMessageIndex:
 const PROTECTED_TAIL_USER_TURNS = 5;
 
 export function getProtectedTailStartOrdinal(sessionId: string): number {
+    // This function is called lazily (only during emergency/recovery when historian failureCount > 0).
+    // On normal transform passes, hasEligibleCompartmentHistory is not computed so this is never called.
     const messages = readRawSessionMessages(sessionId);
     const userOrdinals = messages
         .filter((m) => m.role === "user" && hasMeaningfulUserText(m.parts))

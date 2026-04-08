@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     closeDatabase,
+    getHistorianFailureState,
     getMaxCompressionDepth,
     getOrCreateSessionMeta,
     getPersistedNudgePlacement,
@@ -13,6 +14,7 @@ import {
     getStrippedPlaceholderIds,
     getTagsBySession,
     incrementCompressionDepth,
+    incrementHistorianFailure,
     insertTag,
     openDatabase,
     setPersistedNudgePlacement,
@@ -51,10 +53,9 @@ function useTempDataHome(prefix: string): void {
 }
 
 function resolveContextLimit(): number {
-    const oneMillionContextEnabled =
-        process.env.ANTHROPIC_1M_CONTEXT === "true" ||
-        process.env.VERTEX_ANTHROPIC_1M_CONTEXT === "true";
-    return oneMillionContextEnabled ? 1_000_000 : 200_000;
+    // Tests don't specify providerID/modelID in most events, so the real
+    // resolveContextLimit falls through to DEFAULT_CONTEXT_LIMIT = 128_000.
+    return 128_000;
 }
 
 function countIndexedMessages(sessionId: string, messageId: string): number {
@@ -314,6 +315,40 @@ describe("createEventHandler", () => {
         expect(meta.lastContextPercentage).toBeGreaterThan(65);
     });
 
+    it("clears historian failure state once usage drops below 90%", async () => {
+        useTempDataHome("context-event-clear-historian-failure-");
+        const contextUsageMap = new Map<string, { usage: ContextUsage; updatedAt: number }>();
+        const deps = createDeps(contextUsageMap);
+        incrementHistorianFailure(deps.db, "ses-historian-failure", "429 rate limit");
+        const handler = createEventHandler(deps);
+
+        // Use tokens that put usage well below 90% of 128K default context limit
+        await handler({
+            event: {
+                type: "message.updated",
+                properties: {
+                    info: {
+                        role: "assistant",
+                        finish: "stop",
+                        sessionID: "ses-historian-failure",
+                        tokens: {
+                            input: 80_000,
+                            output: 0,
+                            reasoning: 0,
+                            cache: { read: 0, write: 0 },
+                        },
+                    },
+                },
+            },
+        });
+
+        expect(getHistorianFailureState(openDatabase(), "ses-historian-failure")).toEqual({
+            failureCount: 0,
+            lastError: null,
+            lastFailureAt: null,
+        });
+    });
+
     it("handles compaction and session cleanup lifecycle events", async () => {
         useTempDataHome("context-event-lifecycle-");
         const contextUsageMap = new Map<string, { usage: ContextUsage; updatedAt: number }>([
@@ -391,6 +426,9 @@ describe("createEventHandler", () => {
                 messageId: "msg-keep:p0",
                 type: "message",
                 status: "active",
+                dropMode: "full",
+                toolName: null,
+                inputByteSize: 0,
                 byteSize: 64,
                 reasoningByteSize: 0,
                 sessionId: "ses-removed",

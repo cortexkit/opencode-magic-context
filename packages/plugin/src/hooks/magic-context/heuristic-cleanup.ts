@@ -2,6 +2,7 @@ import type { ContextDatabase } from "../../features/magic-context/storage";
 import {
     getTagsBySession,
     replaceSourceContent,
+    updateTagDropMode,
     updateTagStatus,
 } from "../../features/magic-context/storage";
 import type { TagEntry } from "../../features/magic-context/types";
@@ -27,7 +28,12 @@ export function applyHeuristicCleanup(
     db: ContextDatabase,
     targets: Map<number, TagTarget>,
     messageTagNumbers: Map<MessageLike, number>,
-    config: { autoDropToolAge: number; protectedTags: number; dropAllTools?: boolean },
+    config: {
+        autoDropToolAge: number;
+        dropToolStructure: boolean;
+        protectedTags: number;
+        dropAllTools?: boolean;
+    },
     preloadedTags?: TagEntry[],
 ): { droppedTools: number; deduplicatedTools: number; droppedInjections: number } {
     const tags = preloadedTags ?? getTagsBySession(db, sessionId);
@@ -49,9 +55,18 @@ export function applyHeuristicCleanup(
                 (config.dropAllTools === true || tag.tagNumber <= toolAgeCutoff);
             if (shouldDropTool) {
                 const target = targets.get(tag.tagNumber);
-                const dropResult = target?.drop?.() ?? "absent";
-                if (dropResult === "removed" || dropResult === "absent") {
+                const useFullDrop = config.dropToolStructure || config.dropAllTools === true;
+                const result = useFullDrop
+                    ? (target?.drop?.() ?? "absent")
+                    : (target?.truncate?.() ?? "absent");
+                if (result === "removed" || result === "truncated" || result === "absent") {
                     updateTagStatus(db, sessionId, tag.tagNumber, "dropped");
+                    updateTagDropMode(
+                        db,
+                        sessionId,
+                        tag.tagNumber,
+                        useFullDrop ? "full" : "truncated",
+                    );
                     droppedTools++;
                 }
             }
@@ -128,8 +143,16 @@ export function applyHeuristicCleanup(
                 for (let i = 0; i < group.length - 1; i++) {
                     const tag = group[i];
                     const target = targets.get(tag.tagNumber);
-                    const dropResult = target?.drop?.() ?? "absent";
-                    if (dropResult === "incomplete") continue;
+                    const result = config.dropToolStructure
+                        ? (target?.drop?.() ?? "absent")
+                        : (target?.truncate?.() ?? "absent");
+                    if (result === "incomplete") continue;
+                    updateTagDropMode(
+                        db,
+                        sessionId,
+                        tag.tagNumber,
+                        config.dropToolStructure ? "full" : "truncated",
+                    );
                     updateTagStatus(db, sessionId, tag.tagNumber, "dropped");
                     deduplicatedTools++;
                 }

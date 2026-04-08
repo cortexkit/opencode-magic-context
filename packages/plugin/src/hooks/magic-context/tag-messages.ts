@@ -1,6 +1,7 @@
 import type { ContextDatabase } from "../../features/magic-context/storage";
 import { getSourceContents, saveSourceContent } from "../../features/magic-context/storage";
 import type { Tagger } from "../../features/magic-context/tagger";
+import { isRecord } from "../../shared/record-type-guard";
 import { isReduceToolPart } from "./drop-stale-reduce-calls";
 import { byteSize, isThinkingPart, prependTag } from "./tag-content-primitives";
 import { createExistingTagResolver } from "./tag-id-fallback";
@@ -33,6 +34,7 @@ export type TagTarget = {
     setContent: (content: string) => boolean;
     getContent?: () => string | null;
     drop?: () => ToolDropResult;
+    truncate?: () => ToolDropResult;
     message?: MessageLike;
 };
 
@@ -79,6 +81,36 @@ function getReasoningByteSize(parts: ThinkingLikePart[]): number {
     }
 
     return reasoningBytes;
+}
+
+function estimateInputByteSize(input: unknown): number {
+    try {
+        return JSON.stringify(input).length;
+    } catch {
+        return 0;
+    }
+}
+
+function extractToolTagMetadata(part: unknown): { toolName: string | null; inputByteSize: number } {
+    if (!isRecord(part)) {
+        return { toolName: null, inputByteSize: 0 };
+    }
+
+    const toolName =
+        typeof part.tool === "string"
+            ? part.tool
+            : typeof part.toolName === "string"
+              ? part.toolName
+              : typeof part.name === "string"
+                ? part.name
+                : null;
+    const state = isRecord(part.state) ? part.state : null;
+    const input = state?.input ?? part.args ?? part.input ?? {};
+
+    return {
+        toolName,
+        inputByteSize: estimateInputByteSize(input),
+    };
 }
 
 export function tagMessages(
@@ -219,6 +251,7 @@ export function tagMessages(
                     const toolPart = part;
                     const thinkingParts = precedingThinkingParts;
                     const reasoningBytes = getReasoningByteSize(thinkingParts);
+                    const { toolName, inputByteSize } = extractToolTagMetadata(toolPart);
 
                     const tagId = tagger.assignTag(
                         sessionId,
@@ -227,6 +260,8 @@ export function tagMessages(
                         byteSize(toolPart.state.output),
                         db,
                         reasoningBytes,
+                        toolName,
+                        inputByteSize,
                     );
                     messageTagNumbers.set(
                         message,

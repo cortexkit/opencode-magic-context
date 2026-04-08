@@ -10,7 +10,12 @@ import { byteSize } from "./tag-content-primitives";
 import { clearOldReasoning, tagMessages } from "./transform-operations";
 
 type TextPart = { type: "text"; text: string };
-type ToolPart = { type: "tool"; callID: string; state: { output: string } };
+type ToolPart = {
+    type: "tool";
+    callID: string;
+    tool?: string;
+    state: { output: string; input?: Record<string, unknown> };
+};
 type ThinkingPart = { type: "thinking"; thinking: string };
 type ReasoningPart = { type: "reasoning"; text: string };
 type ToolInvocationPart = { type: "tool-invocation"; callID: string };
@@ -82,6 +87,42 @@ describe("tagMessages", () => {
             expect(getTagById(db, "ses-1", toolTagId!)?.reasoningByteSize).toBe(
                 byteSize(thinkingPart.thinking) + byteSize(reasoningPart.text),
             );
+        });
+
+        it("#then stores tool name and input byte size on the tool tag", () => {
+            useTempDataHome("tag-tool-metadata-");
+            const db = openDatabase();
+            const tagger = createTagger();
+
+            const toolInput = { filePath: "src/index.ts", offset: 1 };
+            const messages: TestMessage[] = [
+                {
+                    info: { id: "m-user", role: "user", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: "read the file" }],
+                },
+                {
+                    info: { id: "m-assistant", role: "assistant" },
+                    parts: [{ type: "tool-invocation", callID: "call-2" }],
+                },
+                {
+                    info: { id: "m-tool", role: "tool" },
+                    parts: [
+                        {
+                            type: "tool",
+                            callID: "call-2",
+                            tool: "read",
+                            state: { input: toolInput, output: "file content" },
+                        },
+                    ],
+                },
+            ];
+
+            tagMessages("ses-1", messages, tagger, db);
+
+            const toolTagId = tagger.getTag("ses-1", "call-2");
+            const toolTag = getTagById(db, "ses-1", toolTagId!);
+            expect(toolTag?.toolName).toBe("read");
+            expect(toolTag?.inputByteSize).toBe(JSON.stringify(toolInput).length);
         });
 
         describe("#when tool output is dropped", () => {

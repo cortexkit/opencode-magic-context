@@ -25,16 +25,19 @@ export {
     openDatabase,
 } from "./storage-db";
 export {
+    clearHistorianFailureState,
     clearPersistedNoteNudge,
     clearPersistedNudgePlacement,
     clearPersistedStickyTurnReminder,
     clearSession,
+    getHistorianFailureState,
     getOrCreateSessionMeta,
     getPersistedNoteNudge,
     getPersistedNudgePlacement,
     getPersistedReasoningWatermark,
     getPersistedStickyTurnReminder,
     getStrippedPlaceholderIds,
+    incrementHistorianFailure,
     loadPersistedUsage,
     removeStrippedPlaceholderId,
     setPersistedNudgePlacement,
@@ -78,6 +81,7 @@ export {
     getTagsBySession,
     getTopNBySize,
     insertTag,
+    updateTagDropMode,
     updateTagMessageId,
     updateTagStatus,
 } from "./storage-tags";

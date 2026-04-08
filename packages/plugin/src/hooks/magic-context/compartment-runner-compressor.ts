@@ -16,7 +16,6 @@ import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
 import { parseCompartmentOutput } from "./compartment-parser";
 import { buildCompressorPrompt } from "./compartment-prompt";
-import { clearInjectionCache } from "./inject-compartments";
 import { estimateTokens } from "./read-session-formatting";
 
 const HISTORIAN_AGENT = "historian";
@@ -279,8 +278,14 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
             allCompartments,
             facts.map((f) => ({ category: f.category, content: f.content })),
         );
-        // Invalidate injection cache so next transform rebuilds <session-history>
-        clearInjectionCache(sessionId);
+        // Do NOT call clearInjectionCache here. The compressor may run in the
+        // background (fire-and-forget from the independent compressor path).
+        // Clearing the in-memory injection cache would cause the next defer pass
+        // to rebuild <session-history> with the new compressed compartments,
+        // producing different message[0] content and busting the LLM cache.
+        // Instead, let the stale in-memory cache persist. The next natural
+        // cache-busting pass (isCacheBusting=true) always bypasses the cache
+        // and reads fresh from DB, automatically picking up the compression.
         incrementCompressionDepth(db, sessionId, originalStart, originalEnd);
 
         sessionLog(

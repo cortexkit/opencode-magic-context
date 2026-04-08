@@ -3,6 +3,7 @@ import {
     getPendingOps,
     getTagsBySession,
     removePendingOp,
+    updateTagDropMode,
     updateTagStatus,
 } from "../../features/magic-context/storage";
 import type { TagEntry } from "../../features/magic-context/types";
@@ -55,6 +56,7 @@ export function applyPendingOperations(
                 if (dropResult === "removed") {
                     didMutateMessage = true;
                 }
+                updateTagDropMode(db, sessionId, pendingOp.tagId, "full");
             } else if (target) {
                 const changed = target.setContent(`[dropped \u00a7${pendingOp.tagId}\u00a7]`);
                 if (changed) didMutateMessage = true;
@@ -80,9 +82,16 @@ export function applyFlushedStatuses(
         if (tag.status === "dropped") {
             const target = targets.get(tag.tagNumber);
             if (tag.type === "tool") {
-                const dropResult = target?.drop?.() ?? "absent";
-                if (dropResult === "removed") {
-                    didMutateMessage = true;
+                if (tag.dropMode === "truncated") {
+                    const truncResult = target?.truncate?.() ?? "absent";
+                    if (truncResult === "truncated") {
+                        didMutateMessage = true;
+                    }
+                } else {
+                    const dropResult = target?.drop?.() ?? "absent";
+                    if (dropResult === "removed") {
+                        didMutateMessage = true;
+                    }
                 }
             } else if (target) {
                 const changed = target.setContent(`[dropped \u00a7${tag.tagNumber}\u00a7]`);

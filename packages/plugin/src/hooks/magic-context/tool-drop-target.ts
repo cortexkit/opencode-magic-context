@@ -1,7 +1,7 @@
 import { isRecord } from "../../shared/record-type-guard";
 import type { MessageLike, ThinkingLikePart } from "./tag-messages";
 
-export type ToolDropResult = "removed" | "absent" | "incomplete";
+export type ToolDropResult = "removed" | "truncated" | "absent" | "incomplete";
 
 interface ToolCallObservation {
     callId: string;
@@ -54,6 +54,94 @@ function setToolContent(part: unknown, content: string): void {
     }
     if (part.type === "tool_result") {
         part.content = content;
+    }
+}
+
+function truncateToolPart(part: unknown): void {
+    if (!isRecord(part)) return;
+
+    // OpenCode format: { type: "tool", state: { input: {...}, output: "..." } }
+    if (part.type === "tool" && isRecord(part.state)) {
+        const state = part.state;
+        state.output = "[truncated]";
+
+        if (isRecord(state.input)) {
+            const inputSize = estimateInputSize(state.input);
+            if (inputSize > 500) {
+                truncateInputValues(state.input);
+            }
+        }
+
+        return;
+    }
+
+    // Anthropic format: { type: "tool_result", content: "..." }
+    if (part.type === "tool_result") {
+        part.content = "[truncated]";
+        return;
+    }
+
+    // OpenCode invocation format: { type: "tool-invocation", args: {...} }
+    if (part.type === "tool-invocation" && isRecord(part.args)) {
+        const inputSize = estimateInputSize(part.args as Record<string, unknown>);
+        if (inputSize > 500) {
+            truncateInputValues(part.args as Record<string, unknown>);
+        }
+        return;
+    }
+
+    // Anthropic invocation format: { type: "tool_use", input: {...} }
+    if (part.type === "tool_use" && isRecord(part.input)) {
+        const inputSize = estimateInputSize(part.input as Record<string, unknown>);
+        if (inputSize > 500) {
+            truncateInputValues(part.input as Record<string, unknown>);
+        }
+    }
+}
+
+function estimateInputSize(input: Record<string, unknown>): number {
+    try {
+        return JSON.stringify(input).length;
+    } catch {
+        return 0;
+    }
+}
+
+const TRUNCATION_SENTINEL = "...[truncated]";
+
+/**
+ * Slice a string without splitting a surrogate pair.
+ * If the character at `maxLen - 1` is a high surrogate, back off by one
+ * to avoid producing an orphaned surrogate that breaks JSON serialization.
+ */
+function safeSlice(str: string, maxLen: number): string {
+    if (str.length <= maxLen) return str;
+    // Check if we'd split a surrogate pair
+    const lastCharCode = str.charCodeAt(maxLen - 1);
+    // High surrogate range: 0xD800–0xDBFF
+    if (lastCharCode >= 0xd800 && lastCharCode <= 0xdbff) {
+        return str.slice(0, maxLen - 1);
+    }
+    return str.slice(0, maxLen);
+}
+
+function truncateInputValues(input: Record<string, unknown>): void {
+    for (const key of Object.keys(input)) {
+        const value = input[key];
+        if (typeof value === "string") {
+            // Already truncated — skip to preserve idempotency
+            if (
+                value.endsWith(TRUNCATION_SENTINEL) ||
+                value === "[object]" ||
+                /^\[\d+ items\]$/.test(value)
+            )
+                continue;
+            input[key] = value.length > 5 ? `${safeSlice(value, 5)}${TRUNCATION_SENTINEL}` : value;
+        } else if (Array.isArray(value)) {
+            input[key] = `[${value.length} items]`;
+        } else if (value !== null && typeof value === "object") {
+            input[key] = "[object]";
+        }
     }
 }
 
@@ -133,7 +221,11 @@ export function createToolDropTarget(
     thinkingParts: ThinkingLikePart[],
     index: ToolCallIndex,
     batch: ToolMutationBatch,
-): { setContent: (content: string) => boolean; drop: () => ToolDropResult } {
+): {
+    setContent: (content: string) => boolean;
+    drop: () => ToolDropResult;
+    truncate: () => ToolDropResult;
+} {
     const drop = (): ToolDropResult => {
         const entry = index.get(callId);
         if (!entry || entry.occurrences.length === 0) return "absent";
@@ -145,6 +237,19 @@ export function createToolDropTarget(
         clearThinkingParts(thinkingParts);
         index.delete(callId);
         return "removed";
+    };
+
+    const truncate = (): ToolDropResult => {
+        const entry = index.get(callId);
+        if (!entry || entry.occurrences.length === 0) return "absent";
+        if (!entry.hasResult) return "incomplete";
+
+        for (const occurrence of entry.occurrences) {
+            // Truncate both result parts (output) and invocation parts (args/input)
+            truncateToolPart(occurrence.part);
+        }
+        clearThinkingParts(thinkingParts);
+        return "truncated";
     };
 
     return {
@@ -169,5 +274,6 @@ export function createToolDropTarget(
             return changed;
         },
         drop,
+        truncate,
     };
 }

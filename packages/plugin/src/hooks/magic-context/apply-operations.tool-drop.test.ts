@@ -11,6 +11,7 @@ import {
     insertTag,
     openDatabase,
     queuePendingOp,
+    updateTagDropMode,
     updateTagStatus,
 } from "../../features/magic-context/storage";
 import { createTagger } from "../../features/magic-context/tagger";
@@ -90,6 +91,7 @@ describe("apply operations for tool drops", () => {
         expect(hasCall(messages, "call-1")).toBe(false);
         expect(getPendingOps(db, "ses-1")).toHaveLength(0);
         expect(getTagById(db, "ses-1", toolTagId!)?.status).toBe("dropped");
+        expect(getTagById(db, "ses-1", toolTagId!)?.dropMode).toBe("full");
     });
 
     it("defers pending drop when only invocation exists", () => {
@@ -245,11 +247,59 @@ describe("apply operations for tool drops", () => {
         expect(toolTagId).toBeDefined();
 
         updateTagStatus(db, "ses-1", toolTagId!, "dropped");
+
+        updateTagDropMode(db, "ses-1", toolTagId!, "truncated");
+
         const didMutate = applyFlushedStatuses("ses-1", db, targets);
         batch.finalize();
 
         expect(didMutate).toBe(true);
-        expect(hasCall(messages, "call-2")).toBe(false);
+        expect(hasCall(messages, "call-2")).toBe(true);
+        const toolPart = messages
+            .flatMap((m) => m.parts)
+            .find((p: any) => p.callID === "call-2" && p.type === "tool") as any;
+        expect(toolPart.state.output).toBe("[truncated]");
+    });
+
+    it("fully removes tool parts when drop mode is full", () => {
+        useTempDataHome("context-tool-drop-flushed-full-");
+        const db = openDatabase();
+        const tagger = createTagger();
+        const messages: MessageLike[] = [
+            {
+                info: { id: "m-user", role: "user", sessionID: "ses-1" },
+                parts: [{ type: "text", text: "hello" }],
+            },
+            {
+                info: { id: "m-tool", role: "assistant", sessionID: "ses-1" },
+                parts: [
+                    {
+                        type: "tool-invocation",
+                        callID: "call-3",
+                        tool: "read",
+                        args: { filePath: "test.ts" },
+                    },
+                    {
+                        type: "tool",
+                        callID: "call-3",
+                        tool: "read",
+                        state: { input: { filePath: "test.ts" }, output: "file content here" },
+                    },
+                ],
+            },
+        ];
+
+        const { targets, batch } = tagMessages("ses-1", messages, tagger, db);
+        const toolTagId = tagger.getTag("ses-1", "call-3");
+        expect(toolTagId).toBeDefined();
+
+        updateTagStatus(db, "ses-1", toolTagId!, "dropped");
+        updateTagDropMode(db, "ses-1", toolTagId!, "full");
+        const didMutate = applyFlushedStatuses("ses-1", db, targets);
+        batch.finalize();
+
+        expect(didMutate).toBe(true);
+        expect(hasCall(messages, "call-3")).toBe(false);
     });
 
     it("preserves step markers when dropping a tool from a mixed assistant message", () => {

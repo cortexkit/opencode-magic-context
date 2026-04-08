@@ -252,5 +252,105 @@ describe("tool-drop-target", () => {
                 });
             });
         });
+
+        describe("#given a complete tool pair with structured input", () => {
+            describe("#when truncate is called", () => {
+                it("#then it keeps small inputs intact while truncating result content", () => {
+                    const toolResultPart = {
+                        type: "tool_result",
+                        tool_use_id: "call-3",
+                        content: "old-result",
+                    };
+                    const toolPart = {
+                        type: "tool",
+                        callID: "call-3",
+                        state: {
+                            input: {
+                                query: "abcdef",
+                                short: "abc",
+                                files: ["a", "b"],
+                                metadata: { nested: true },
+                                exact: true,
+                                limit: 2,
+                            },
+                            output: "old-tool",
+                        },
+                    };
+                    const messages: MessageLike[] = [
+                        message("m-inv", "assistant", [{ type: "tool_use", id: "call-3" }]),
+                        message("m-res", "tool", [toolPart]),
+                        message("m-res-2", "assistant", [toolResultPart]),
+                    ];
+                    const thinkingParts: ThinkingLikePart[] = [
+                        { type: "thinking", thinking: "to clear" },
+                        { type: "reasoning", text: "trace" },
+                    ];
+                    const index = buildIndex(messages);
+                    const batch = new ToolMutationBatch(messages);
+                    const target = createToolDropTarget("call-3", thinkingParts, index, batch);
+
+                    expect(target.truncate()).toBe("truncated");
+
+                    batch.finalize();
+
+                    expect(hasCall(messages, "call-3")).toBe(true);
+                    expect(messages).toHaveLength(3);
+                    expect(toolPart.state as Record<string, unknown>).toEqual({
+                        input: {
+                            query: "abcdef",
+                            short: "abc",
+                            files: ["a", "b"],
+                            metadata: { nested: true },
+                            exact: true,
+                            limit: 2,
+                        },
+                        output: "[truncated]",
+                    });
+                    expect(toolResultPart.content).toBe("[truncated]");
+                    expect(thinkingParts[0]?.thinking).toBe("[cleared]");
+                    expect(thinkingParts[1]?.text).toBe("[cleared]");
+                });
+
+                it("#then truncates large inputs before keeping the tool structure", () => {
+                    const largeQuery = "x".repeat(600);
+                    const toolPart = {
+                        type: "tool",
+                        callID: "call-4",
+                        state: {
+                            input: {
+                                query: largeQuery,
+                                files: ["a", "b"],
+                                metadata: { nested: true },
+                            },
+                            output: "old-tool",
+                        },
+                    };
+                    const messages: MessageLike[] = [
+                        message("m-inv", "assistant", [
+                            {
+                                type: "tool-invocation",
+                                callID: "call-4",
+                                args: { query: largeQuery },
+                            },
+                        ]),
+                        message("m-res", "tool", [toolPart]),
+                    ];
+                    const index = buildIndex(messages);
+                    const batch = new ToolMutationBatch(messages);
+                    const target = createToolDropTarget("call-4", [], index, batch);
+
+                    expect(target.truncate()).toBe("truncated");
+
+                    expect(toolPart.state as Record<string, unknown>).toEqual({
+                        input: {
+                            query: "xxxxx...[truncated]",
+                            files: "[2 items]",
+                            metadata: "[object]",
+                        },
+                        output: "[truncated]",
+                    });
+                });
+            });
+        });
     });
 });

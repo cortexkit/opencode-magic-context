@@ -1,3 +1,4 @@
+import { updateSessionMeta } from "../../features/magic-context/storage-meta";
 import { sessionLog } from "../../shared/logger";
 import { runCompartmentAgent } from "./compartment-runner-incremental";
 import { executeContextRecompInternal } from "./compartment-runner-recomp";
@@ -18,9 +19,18 @@ export function startCompartmentAgent(deps: CompartmentRunnerDeps): void {
         return;
     }
 
+    // Track the real underlying promise — NOT a raced wrapper.
+    // This ensures activeRuns.has(sessionId) stays true until the historian run
+    // actually completes, preventing duplicate runs even if an external await times out.
     const promise = runCompartmentAgent(deps)
         .catch((err) => {
             sessionLog(deps.sessionId, "compartment agent: unhandled rejection:", err);
+            // Ensure compartmentInProgress is cleared on any failure
+            try {
+                updateSessionMeta(deps.db, deps.sessionId, { compartmentInProgress: false });
+            } catch {
+                // best effort
+            }
         })
         .finally(() => {
             activeRuns.delete(deps.sessionId);

@@ -7,6 +7,10 @@ import {
 import { promoteSessionFactsToMemory } from "../../features/magic-context/memory";
 import { resolveProjectIdentity } from "../../features/magic-context/memory/project-identity";
 import { getMemoriesByProject } from "../../features/magic-context/memory/storage-memory";
+import {
+    clearHistorianFailureState,
+    incrementHistorianFailure,
+} from "../../features/magic-context/storage";
 import { updateSessionMeta } from "../../features/magic-context/storage-meta";
 import { insertUserMemoryCandidates } from "../../features/magic-context/user-memory/storage-user-memory";
 import { normalizeSDKResponse } from "../../shared";
@@ -25,6 +29,24 @@ import { onNoteTrigger } from "./note-nudger";
 import { getProtectedTailStartOrdinal, readSessionChunk } from "./read-session-chunk";
 import { sendIgnoredMessage } from "./send-session-notification";
 
+/** Suppress repeated historian failure notifications — at most once per 60 seconds per session */
+const HISTORIAN_ALERT_COOLDOWN_MS = 60 * 1000;
+const lastHistorianAlertBySession = new Map<string, number>();
+
+function shouldSuppressHistorianAlert(sessionId: string): boolean {
+    const lastAlert = lastHistorianAlertBySession.get(sessionId);
+    if (lastAlert && Date.now() - lastAlert < HISTORIAN_ALERT_COOLDOWN_MS) {
+        return true;
+    }
+    lastHistorianAlertBySession.set(sessionId, Date.now());
+    return false;
+}
+
+/** Clean up module-level session state on session deletion. */
+export function clearHistorianAlertState(sessionId: string): void {
+    lastHistorianAlertBySession.delete(sessionId);
+}
+
 export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<void> {
     const {
         client,
@@ -40,6 +62,10 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
 
     const notifyHistorianIssue = async (message: string): Promise<void> => {
         issueNotified = true;
+        if (shouldSuppressHistorianAlert(sessionId)) {
+            sessionLog(sessionId, "historian alert suppressed (cooldown):", message.slice(0, 100));
+            return;
+        }
         await sendIgnoredMessage(client, sessionId, message, getNotificationParams?.() ?? {});
     };
 
@@ -121,8 +147,13 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
             sequenceOffset: priorCompartments.length,
             dumpLabelBase: `incremental-${sessionId}-${chunk.startIndex}-${chunk.endIndex}`,
             timeoutMs: historianTimeoutMs,
+            fallbackModelId: deps.fallbackModelId,
         });
         if (!validatedPass.ok) {
+            // Always track historian failures regardless of usage percentage.
+            // The emergency abort path at 95% checks failureCount > 0, so failures
+            // at any pressure level must be recorded.
+            incrementHistorianFailure(db, sessionId, validatedPass.error);
             await notifyHistorianIssue(
                 `## Historian alert\n\n${validatedPass.error}\n\nNo new compartments or facts were written. Check the historian model/output and try again.`,
             );
@@ -145,6 +176,7 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
         db.transaction(() => {
             appendCompartments(db, sessionId, newCompartments);
             replaceSessionFacts(db, sessionId, validatedPass.facts ?? []);
+            clearHistorianFailureState(db, sessionId);
         })();
         // Invalidate in-memory injection cache so the next transform rebuilds <session-history>
         // with the new compartments/facts. Without this, cached stale content persists.

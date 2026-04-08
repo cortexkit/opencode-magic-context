@@ -10,6 +10,7 @@ export interface CompartmentRunnerDeps {
     historianTimeoutMs?: number;
     directory: string;
     historyBudgetTokens?: number;
+    fallbackModelId?: string;
     getNotificationParams?: () => NotificationParams;
     /** When true, inject compaction markers into OpenCode's DB after publication */
     experimentalCompactionMarkers?: boolean;

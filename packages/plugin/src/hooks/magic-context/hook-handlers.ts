@@ -6,6 +6,7 @@ import {
     getOrCreateSessionMeta,
     updateSessionMeta,
 } from "../../features/magic-context/storage-meta";
+import { clearHistorianFailureState } from "../../features/magic-context/storage-meta-persisted";
 import type { PluginContext } from "../../plugin/types";
 import { sessionLog } from "../../shared/logger";
 import { FORCE_COMPARTMENT_PERCENTAGE } from "./compartment-trigger";
@@ -116,10 +117,29 @@ export function createEventHook(args: {
         if (input.event.type === "message.updated") {
             const assistantInfo = getMessageUpdatedAssistantInfo(input.event.properties);
             if (assistantInfo?.providerID && assistantInfo?.modelID) {
+                const previous = args.liveModelBySession.get(assistantInfo.sessionID);
                 args.liveModelBySession.set(assistantInfo.sessionID, {
                     providerID: assistantInfo.providerID,
                     modelID: assistantInfo.modelID,
                 });
+                // When the model changes (e.g., switching from 128k to 1M context model),
+                // clear stale context percentage and historian failure state so the transform
+                // doesn't keep using the old model's usage metrics or emergency state.
+                if (
+                    previous &&
+                    (previous.providerID !== assistantInfo.providerID ||
+                        previous.modelID !== assistantInfo.modelID)
+                ) {
+                    sessionLog(
+                        assistantInfo.sessionID,
+                        `model changed (${previous.providerID}/${previous.modelID} -> ${assistantInfo.providerID}/${assistantInfo.modelID}), clearing historian failure state`,
+                    );
+                    // Don't clear lastContextPercentage/lastInputTokens here — the event handler
+                    // already computed the correct percentage using the NEW model's context limit
+                    // (via resolveContextLimit with the new providerID/modelID). Clearing would
+                    // erase the first valid usage sample from the new model.
+                    clearHistorianFailureState(args.db, assistantInfo.sessionID);
+                }
             }
         }
 

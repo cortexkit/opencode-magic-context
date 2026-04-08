@@ -45,6 +45,7 @@ import {
     applyPendingOperations,
     type MessageLike,
     stripProcessedImages,
+    type TagTarget,
     truncateErroredTools,
 } from "./transform-operations";
 import { logTransformTiming } from "./transform-stage-logger";
@@ -54,7 +55,7 @@ interface RunPostTransformPhaseArgs {
     db: ContextDatabase;
     messages: MessageLike[];
     tags: TagEntry[];
-    targets: Map<number, { setContent: (content: string) => boolean }>;
+    targets: Map<number, TagTarget>;
     reasoningByMessage: Map<MessageLike, { type: string; thinking?: string; text?: string }[]>;
     messageTagNumbers: Map<MessageLike, number>;
     batch: { finalize: () => void } | null;
@@ -69,6 +70,7 @@ interface RunPostTransformPhaseArgs {
     flushedSessions: Set<string>;
     lastHeuristicsTurnId: Map<string, string>;
     autoDropToolAge: number;
+    dropToolStructure: boolean;
     clearReasoningAge: number;
     protectedTags: number;
     nudgePlacements: NudgePlacementStore;
@@ -175,6 +177,7 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
                 args.messageTagNumbers,
                 {
                     autoDropToolAge: args.autoDropToolAge,
+                    dropToolStructure: args.dropToolStructure,
                     protectedTags: args.protectedTags,
                     dropAllTools: forceMaterialization,
                 },

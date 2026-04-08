@@ -3,6 +3,9 @@ export interface TagEntry {
     messageId: string;
     type: "message" | "tool" | "file";
     status: "active" | "dropped" | "compacted";
+    dropMode: "full" | "truncated";
+    toolName: string | null;
+    inputByteSize: number;
     byteSize: number;
     reasoningByteSize: number;
     sessionId: string;

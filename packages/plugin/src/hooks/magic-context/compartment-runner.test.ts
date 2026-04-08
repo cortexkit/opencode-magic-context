@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -21,6 +21,7 @@ import {
 } from "../../features/magic-context/storage";
 import { createTagger } from "../../features/magic-context/tagger";
 import type { PluginContext } from "../../plugin/types";
+import * as shared from "../../shared";
 import { executeContextRecomp, runCompartmentAgent } from "./compartment-runner";
 import { tagMessages } from "./tag-messages";
 
@@ -35,6 +36,10 @@ afterEach(() => {
         rmSync(dir, { recursive: true, force: true });
     }
     tempDirs.length = 0;
+
+    // Clean up historian debug dumps created during tests
+    const dumpDir = join(tmpdir(), "magic-context-historian");
+    rmSync(dumpDir, { recursive: true, force: true });
 });
 
 describe("executeContextRecomp", () => {
@@ -416,7 +421,7 @@ describe("executeContextRecomp", () => {
             if (input.body?.noReply === true) {
                 return {};
             }
-            throw new Error("prompt timed out after 120000ms");
+            return {};
         });
         const client = {
             session: {
@@ -428,16 +433,27 @@ describe("executeContextRecomp", () => {
             },
         } as unknown as PluginContext["client"];
 
-        const result = await executeContextRecomp({
-            client,
-            db,
-            sessionId: "ses-recomp-timeout",
-            tokenBudget: 10_000,
-            historianTimeoutMs: 300_000,
-            directory: "/tmp",
-        });
+        const promptSyncSpy = spyOn(shared, "promptSyncWithModelSuggestionRetry").mockRejectedValue(
+            new Error("prompt timed out after 300000ms"),
+        );
 
-        expect(result).toContain("prompt timed out after 120000ms");
+        let result = "";
+        try {
+            result = await withImmediateTimeouts(async () => {
+                return executeContextRecomp({
+                    client,
+                    db,
+                    sessionId: "ses-recomp-timeout",
+                    tokenBudget: 10_000,
+                    historianTimeoutMs: 300_000,
+                    directory: "/tmp",
+                });
+            });
+        } finally {
+            promptSyncSpy.mockRestore();
+        }
+
+        expect(result).toContain("prompt timed out after 300000ms");
         expect(getIgnoredNotificationTexts(prompt)).toContain(
             "## Magic Recomp\n\nHistorian pass 1, attempt 1 started for messages 1-4.",
         );
@@ -836,6 +852,24 @@ function getHistorianPromptCount(promptMock: ReturnType<typeof mock>): number {
         .filter((input) => input.body?.noReply !== true).length;
 }
 
+async function withImmediateTimeouts<T>(callback: () => Promise<T>): Promise<T> {
+    const originalSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler: TimerHandler, _timeout?: number, ...args: unknown[]) => {
+        queueMicrotask(() => {
+            if (typeof handler === "function") {
+                handler(...args);
+            }
+        });
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
+
+    try {
+        return await callback();
+    } finally {
+        globalThis.setTimeout = originalSetTimeout;
+    }
+}
+
 function _getHistorianDumpContents(sessionId: string): string[] {
     const dumpDir = join(tmpdir(), "magic-context-historian");
     try {
@@ -919,6 +953,165 @@ describe("runCompartmentAgent", () => {
             query: { directory: "/tmp/parent" },
         });
         expect(promptSession.mock.calls[0]?.[0]?.body.agent).toBe("historian");
+    });
+
+    it("retries transient historian prompt failures on the same child session", async () => {
+        useTempDataHome("compartment-runner-retry-");
+        createOpenCodeDb("ses-retry", [
+            { id: "m-1", role: "user", text: "First" },
+            { id: "m-2", role: "assistant", text: "Second" },
+            { id: "m-3", role: "user", text: "protected 1" },
+            { id: "m-4", role: "user", text: "protected 2" },
+            { id: "m-5", role: "user", text: "protected 3" },
+            { id: "m-6", role: "user", text: "protected 4" },
+            { id: "m-7", role: "user", text: "protected 5" },
+        ]);
+        const db = openDatabase();
+
+        const createSession = mock(async () => ({ data: { id: "ses-agent-retry" } }));
+        const promptSession = mock(async () => ({}));
+        const client = {
+            session: {
+                get: mock(async () => ({ data: { directory: "/tmp/retry" } })),
+                create: createSession,
+                prompt: promptSession,
+                messages: mock(async () => ({
+                    data: [
+                        {
+                            info: { role: "assistant", time: { created: 1 } },
+                            parts: [
+                                {
+                                    type: "text",
+                                    text: `<compartment start="1" end="2" title="Recovered">Summary</compartment>`,
+                                },
+                            ],
+                        },
+                    ],
+                })),
+                delete: mock(async () => ({})),
+            },
+        } as unknown as PluginContext["client"];
+
+        let promptSyncCallCount = 0;
+        const promptSyncSpy = spyOn(
+            shared,
+            "promptSyncWithModelSuggestionRetry",
+        ).mockImplementation(async () => {
+            promptSyncCallCount += 1;
+            if (promptSyncCallCount < 3) {
+                throw new Error("429 rate limit");
+            }
+        });
+
+        try {
+            await withImmediateTimeouts(async () => {
+                await runCompartmentAgent({
+                    client,
+                    db,
+                    sessionId: "ses-retry",
+                    tokenBudget: 10_000,
+                    directory: "/tmp",
+                });
+            });
+        } finally {
+            promptSyncSpy.mockRestore();
+        }
+
+        expect(createSession).toHaveBeenCalledTimes(1);
+        expect(promptSyncCallCount).toBe(3);
+        expect(getCompartments(db, "ses-retry")).toEqual([
+            expect.objectContaining({ title: "Recovered", startMessage: 1, endMessage: 2 }),
+        ]);
+    });
+
+    it("falls back to the primary session model after historian and repair output both fail validation", async () => {
+        useTempDataHome("compartment-runner-fallback-");
+        createOpenCodeDb("ses-fallback", [
+            { id: "m-1", role: "user", text: "First" },
+            { id: "m-2", role: "assistant", text: "Second" },
+            { id: "m-3", role: "user", text: "protected 1" },
+            { id: "m-4", role: "user", text: "protected 2" },
+            { id: "m-5", role: "user", text: "protected 3" },
+            { id: "m-6", role: "user", text: "protected 4" },
+            { id: "m-7", role: "user", text: "protected 5" },
+        ]);
+        const db = openDatabase();
+
+        const promptSession = mock(async () => ({}));
+        const messages = mock(async () => {
+            const callIndex = messages.mock.calls.length;
+            if (callIndex < 3) {
+                return {
+                    data: [
+                        {
+                            info: { role: "assistant", time: { created: callIndex } },
+                            parts: [
+                                {
+                                    type: "text",
+                                    text: `<compartment start="3" end="4" title="Bad">Bad</compartment>`,
+                                },
+                            ],
+                        },
+                    ],
+                };
+            }
+
+            return {
+                data: [
+                    {
+                        info: { role: "assistant", time: { created: callIndex } },
+                        parts: [
+                            {
+                                type: "text",
+                                text: `<compartment start="1" end="2" title="Fallback">Recovered</compartment>`,
+                            },
+                        ],
+                    },
+                ],
+            };
+        });
+        const client = {
+            session: {
+                get: mock(async () => ({ data: { directory: "/tmp/fallback" } })),
+                create: mock(async () => ({
+                    data: { id: `ses-agent-${messages.mock.calls.length}` },
+                })),
+                prompt: promptSession,
+                messages,
+                delete: mock(async () => ({})),
+            },
+        } as unknown as PluginContext["client"];
+
+        await runCompartmentAgent({
+            client,
+            db,
+            sessionId: "ses-fallback",
+            tokenBudget: 10_000,
+            directory: "/tmp",
+            fallbackModelId: "openai/gpt-4o",
+        });
+
+        const fallbackPrompts = promptSession.mock.calls as unknown as Array<
+            [
+                {
+                    body?: {
+                        agent?: string;
+                        model?: { providerID: string; modelID: string };
+                    };
+                },
+            ]
+        >;
+        expect(fallbackPrompts[0]?.[0]?.body?.agent).toBe("historian");
+        expect(fallbackPrompts[1]?.[0]?.body?.agent).toBe("historian");
+        // Fallback now includes both agent (for system prompt) and model (for override)
+        expect(fallbackPrompts[2]?.[0]?.body?.agent).toBe("historian");
+        expect(fallbackPrompts[2]?.[0]?.body?.model).toEqual({
+            providerID: "openai",
+            modelID: "gpt-4o",
+        });
+        expect(getCompartments(db, "ses-fallback")).toEqual([
+            expect.objectContaining({ title: "Fallback", startMessage: 1, endMessage: 2 }),
+        ]);
     });
 
     it("starts new summarization after the last stored raw compartment end", async () => {

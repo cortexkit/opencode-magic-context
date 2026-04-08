@@ -67,6 +67,7 @@ export function createSystemPromptHashHandler(deps: {
     db: ContextDatabase;
     protectedTags: number;
     ctxReduceEnabled: boolean;
+    dropToolStructure: boolean;
     dreamerEnabled: boolean;
     /** When true + dreamerEnabled, inject ARCHITECTURE.md and STRUCTURE.md into system prompt */
     injectDocs: boolean;
@@ -106,6 +107,7 @@ export function createSystemPromptHashHandler(deps: {
                 deps.protectedTags,
                 deps.ctxReduceEnabled,
                 deps.dreamerEnabled,
+                deps.dropToolStructure,
             );
             output.system.push(guidance);
             sessionLog(

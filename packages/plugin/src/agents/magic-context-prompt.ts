@@ -12,8 +12,17 @@ type AgentType =
     | "athena"
     | "athena-junior";
 
+function getToolHistoryGuidance(dropToolStructure: boolean): string {
+    if (dropToolStructure) {
+        return `Compressed history intentionally omits tool calls and their outputs — summaries like "I edited file X" are historian records, not patterns to replicate. In the live conversation, older tool calls and their results are cleaned up to save context — you may see your own past messages referencing actions without the corresponding tool call or result visible. This is normal context management. ALWAYS use real tool calls; never simulate, fabricate, or inline tool outputs in your text. If there is no tool result message, the action did not happen. NEVER simulate, hallucinate or claim tool calls, command output, search results, file edits, or diffs in plain text as if they actually occurred.`;
+    }
+
+    return `Older tool calls in your conversation show truncated inputs and [truncated] outputs — this is normal context management, not a pattern to follow. The original tool calls executed successfully with full inputs and produced real outputs that were later cleaned up to save context. ALWAYS use real tool calls with complete arguments; never copy truncated patterns like "filePa...[truncated]" into your tool inputs. If you need to re-read a file or re-run a command, make a fresh tool call.`;
+}
+
 const BASE_INTRO = (
     protectedTags: number,
+    dropToolStructure: boolean,
 ): string => `Messages and tool outputs are tagged with §N§ identifiers (e.g., §1§, §42§).
 Use \`ctx_reduce\` to manage context size. It supports one operation:
 - \`drop\`: Remove entirely (best for tool outputs you already acted on).
@@ -33,13 +42,16 @@ Use \`ctx_expand\` to decompress a compartment range to see the original convers
 - Looking for how something was implemented previously → \`ctx_search(query="how does the dreamer lease work")\`
 - Want to recall what was decided in an earlier conversation → \`ctx_search(query="dashboard release signing setup")\`
 \`ctx_search\` returns ranked results from memories, session facts, and raw message history. Use message ordinals from results with \`ctx_expand\` to retrieve surrounding conversation context.
+${getToolHistoryGuidance(dropToolStructure)}
 NEVER drop large ranges blindly (e.g., "1-50"). Review each tag before deciding.
 NEVER drop user messages — they are short and will be summarized by compartmentalization automatically. Dropping them loses context the historian needs.
 NEVER drop assistant text messages unless they are exceptionally large. Your conversation messages are lightweight; only large tool outputs are worth dropping.
 Before your turn finishes, consider using \`ctx_reduce\` to drop large tool outputs you no longer need.`;
 
 /** Intro when ctx_reduce is disabled — no drop guidance, no ctx_reduce references. */
-const BASE_INTRO_NO_REDUCE = `Messages and tool outputs are tagged with §N§ identifiers (e.g., §1§, §42§).
+const BASE_INTRO_NO_REDUCE = (
+    dropToolStructure: boolean,
+): string => `Messages and tool outputs are tagged with §N§ identifiers (e.g., §1§, §42§).
 Use \`ctx_note\` for deferred intentions — things to tackle later, not right now. NOT for task tracking (use todos). Notes survive context compression and you'll be reminded at natural work boundaries (after commits, historian runs, todo completion).
 Use \`ctx_memory\` to manage cross-session project memories. Write new memories or delete stale ones. Memories persist across sessions and are automatically injected into new sessions.
 **Save to memory proactively**: If you spent multiple turns finding something (a file path, a DB location, a config pattern, a workaround), save it with \`ctx_memory\` so future sessions don't repeat the search. Examples:
@@ -54,7 +66,8 @@ Use \`ctx_expand\` to decompress a compartment range to see the original convers
 - Need a config value, API key location, or environment detail → \`ctx_search(query="embedding provider configuration")\`
 - Looking for how something was implemented previously → \`ctx_search(query="how does the dreamer lease work")\`
 - Want to recall what was decided in an earlier conversation → \`ctx_search(query="dashboard release signing setup")\`
-\`ctx_search\` returns ranked results from memories, session facts, and raw message history. Use message ordinals from results with \`ctx_expand\` to retrieve surrounding conversation context.`;
+\`ctx_search\` returns ranked results from memories, session facts, and raw message history. Use message ordinals from results with \`ctx_expand\` to retrieve surrounding conversation context.
+${getToolHistoryGuidance(dropToolStructure)}`;
 
 const SISYPHUS_SECTION = `
 ### Reduction Triggers
@@ -217,14 +230,15 @@ export function buildMagicContextSection(
     protectedTags: number,
     ctxReduceEnabled = true,
     dreamerEnabled = false,
+    dropToolStructure = true,
 ): string {
     const smartNoteGuidance = dreamerEnabled
         ? `\nWhen \`surface_condition\` is provided with \`write\`, the note becomes a project-scoped smart note.\nThe dreamer evaluates smart note conditions during nightly runs and surfaces them when conditions are met.\nExample: \`ctx_note(action="write", content="Implement X because Y", surface_condition="When PR #42 is merged in this repo")\``
         : "";
 
     if (!ctxReduceEnabled) {
-        return `## Magic Context\n\n${BASE_INTRO_NO_REDUCE}${smartNoteGuidance}`;
+        return `## Magic Context\n\n${BASE_INTRO_NO_REDUCE(dropToolStructure)}${smartNoteGuidance}`;
     }
     const section = agent ? AGENT_SECTIONS[agent] : GENERIC_SECTION;
-    return `## Magic Context\n\n${BASE_INTRO(protectedTags)}${smartNoteGuidance}\n${section}\n\nPrefer many small targeted operations over one large blanket operation. Compress early and often — don't wait for warnings.`;
+    return `## Magic Context\n\n${BASE_INTRO(protectedTags, dropToolStructure)}${smartNoteGuidance}\n${section}\n\nPrefer many small targeted operations over one large blanket operation. Compress early and often — don't wait for warnings.`;
 }

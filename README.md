@@ -7,6 +7,9 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@cortexkit/opencode-magic-context"><img src="https://img.shields.io/npm/v/@cortexkit/opencode-magic-context?color=blue&style=flat-square" alt="npm"></a>
+  <a href="https://www.npmjs.com/package/@cortexkit/opencode-magic-context"><img src="https://img.shields.io/npm/dm/@cortexkit/opencode-magic-context?color=brightgreen&style=flat-square&label=downloads" alt="downloads"></a>
+  <a href="https://github.com/cortexkit/opencode-magic-context/stargazers"><img src="https://img.shields.io/github/stars/cortexkit/opencode-magic-context?style=flat-square&color=yellow" alt="stars"></a>
+  <a href="https://github.com/cortexkit/opencode-magic-context/commits"><img src="https://img.shields.io/github/last-commit/cortexkit/opencode-magic-context?style=flat-square&color=green" alt="last commit"></a>
   <a href="https://github.com/cortexkit/opencode-magic-context/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"></a>
 </p>
 

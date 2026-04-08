@@ -34,17 +34,18 @@ describe("event-resolvers", () => {
             expect(limit).toBe(500_000);
         });
 
-        it("defaults anthropic to 1M when no cache entry exists", () => {
+        it("resolves anthropic context from models.dev when no cache entry exists", () => {
             //#given
             const config = {
                 modelContextLimitsCache: new Map<string, number>(),
             };
 
-            //#when
+            //#when — models.dev may return 200K (real limit) or 128K (default if no models.json)
             const limit = resolveContextLimit("anthropic", "claude-opus-4-5", config);
 
-            //#then
-            expect(limit).toBe(1_000_000);
+            //#then — should NOT be 1M; uses models.dev real limit or conservative default
+            expect(limit).toBeLessThanOrEqual(200_000);
+            expect(limit).toBeGreaterThan(0);
         });
 
         it("returns default for missing provider", () => {
@@ -55,7 +56,7 @@ describe("event-resolvers", () => {
             const limit = resolveContextLimit(undefined, "gpt-4o", config);
 
             //#then
-            expect(limit).toBe(200_000);
+            expect(limit).toBe(128_000);
         });
     });
 
