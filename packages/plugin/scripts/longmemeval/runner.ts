@@ -296,7 +296,7 @@ async function withRetry<T>(
                 `${operationName} failed on attempt ${attempt}/${config.maxRequestAttempts}: ${lastError.message}; retrying in ${retryDelay}ms`,
             );
             await sleep(retryDelay);
-            continue;
+
         } finally {
             clearTimeout(timeout);
         }
