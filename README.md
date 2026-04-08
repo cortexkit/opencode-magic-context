@@ -385,6 +385,18 @@ All durable states live in a local SQLite database. If the database can't be ope
 
 ---
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=cortexkit%2Fopencode-magic-context&type=date&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=cortexkit/opencode-magic-context&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=cortexkit/opencode-magic-context&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=cortexkit/opencode-magic-context&type=date&legend=top-left" />
+ </picture>
+</a>
+
+---
+
 ## Development
 
 **Requirements:** [Bun](https://bun.sh) ≥ 1.0

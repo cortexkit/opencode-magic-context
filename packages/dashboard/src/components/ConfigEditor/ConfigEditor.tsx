@@ -116,8 +116,8 @@ const SECTION_ICONS: Record<string, string> = {
   "Thresholds": "⚡",
   "Tags & Cleanup": "🏷️",
   "Historian": "📜",
-
   "Memory": "🧠",
+  "Experimental": "🧪",
 };
 
 // Fields that should use range sliders (percentage or threshold values)
@@ -845,6 +845,117 @@ function ConfigForm(props: {
                 </div>
                 <div class="config-card-content">
                   <For each={tagsFields[1]}>{renderField}</For>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Experimental Features */}
+          {(() => {
+            const exp = () => (getNestedValue(formData(), "experimental") as {
+              compaction_markers?: boolean;
+              user_memories?: { enabled?: boolean; promotion_threshold?: number };
+              pin_key_files?: { enabled?: boolean; token_budget?: number; min_reads?: number };
+            } | undefined) ?? {};
+
+            const compactionMarkers = () => exp().compaction_markers ?? false;
+            const userMemEnabled = () => exp().user_memories?.enabled ?? false;
+            const userMemThreshold = () => exp().user_memories?.promotion_threshold ?? 3;
+            const pinEnabled = () => exp().pin_key_files?.enabled ?? false;
+            const pinBudget = () => exp().pin_key_files?.token_budget ?? 10000;
+            const pinMinReads = () => exp().pin_key_files?.min_reads ?? 4;
+
+            const updateExp = (path: string, value: unknown) => {
+              const current = exp();
+              if (path === "compaction_markers") {
+                handleFieldChange("experimental", { ...current, compaction_markers: value });
+              } else if (path.startsWith("user_memories.")) {
+                const um = current.user_memories ?? { enabled: false, promotion_threshold: 3 };
+                const field = path.split(".")[1];
+                handleFieldChange("experimental", { ...current, user_memories: { ...um, [field]: value } });
+              } else if (path.startsWith("pin_key_files.")) {
+                const pk = current.pin_key_files ?? { enabled: false, token_budget: 10000, min_reads: 4 };
+                const field = path.split(".")[1];
+                handleFieldChange("experimental", { ...current, pin_key_files: { ...pk, [field]: value } });
+              }
+            };
+
+            return (
+              <div class="config-card full-width">
+                <div class="config-card-header">
+                  <span class="config-card-icon">🧪</span>
+                  <span class="config-card-title">Experimental</span>
+                </div>
+                <div class="config-card-two-col">
+                  {/* Left column: Compaction Markers + User Memories */}
+                  <div class="config-card-content">
+                    <div class="config-field">
+                      <label class="field-label">
+                        <span>Compaction Markers</span>
+                        <span class="field-hint">Inject boundary into OpenCode's DB so transform only processes the live tail</span>
+                      </label>
+                      <label class="toggle">
+                        <input type="checkbox" checked={compactionMarkers()} onChange={(e) => updateExp("compaction_markers", e.currentTarget.checked)} />
+                        <span class="toggle-slider" />
+                        <span class="toggle-label">{compactionMarkers() ? "Enabled" : "Disabled"}</span>
+                      </label>
+                    </div>
+
+                    <div class="config-field" style={{ "margin-top": "16px" }}>
+                      <label class="field-label">
+                        <span>User Memories</span>
+                        <span class="field-hint">Extract behavioral observations from historian runs, promote recurring patterns to stable user memories. Requires dreamer.</span>
+                      </label>
+                      <label class="toggle">
+                        <input type="checkbox" checked={userMemEnabled()} onChange={(e) => updateExp("user_memories.enabled", e.currentTarget.checked)} />
+                        <span class="toggle-slider" />
+                        <span class="toggle-label">{userMemEnabled() ? "Enabled" : "Disabled"}</span>
+                      </label>
+                    </div>
+
+                    <Show when={userMemEnabled()}>
+                      <div class="config-field" style={{ "margin-top": "8px", "padding-left": "12px" }}>
+                        <label class="field-label">
+                          <span>Promotion Threshold</span>
+                          <span class="field-hint">Minimum candidate observations before dreamer promotes to stable (2–20)</span>
+                        </label>
+                        <input type="number" class="field-input" min={2} max={20} value={userMemThreshold()} onInput={(e) => updateExp("user_memories.promotion_threshold", Number(e.currentTarget.value))} style={{ width: "80px" }} />
+                      </div>
+                    </Show>
+                  </div>
+
+                  {/* Right column: Key File Pinning */}
+                  <div class="config-card-content">
+                    <div class="config-field">
+                      <label class="field-label">
+                        <span>Key File Pinning</span>
+                        <span class="field-hint">Pin frequently-read files into the system prompt so the agent doesn't need to re-read them after drops. Requires dreamer.</span>
+                      </label>
+                      <label class="toggle">
+                        <input type="checkbox" checked={pinEnabled()} onChange={(e) => updateExp("pin_key_files.enabled", e.currentTarget.checked)} />
+                        <span class="toggle-slider" />
+                        <span class="toggle-label">{pinEnabled() ? "Enabled" : "Disabled"}</span>
+                      </label>
+                    </div>
+
+                    <Show when={pinEnabled()}>
+                      <div class="config-field" style={{ "margin-top": "8px", "padding-left": "12px" }}>
+                        <label class="field-label">
+                          <span>Token Budget</span>
+                          <span class="field-hint">Total tokens for all pinned key files (2,000–30,000)</span>
+                        </label>
+                        <input type="number" class="field-input" min={2000} max={30000} step={1000} value={pinBudget()} onInput={(e) => updateExp("pin_key_files.token_budget", Number(e.currentTarget.value))} style={{ width: "100px" }} />
+                      </div>
+
+                      <div class="config-field" style={{ "margin-top": "8px", "padding-left": "12px" }}>
+                        <label class="field-label">
+                          <span>Min Reads</span>
+                          <span class="field-hint">Minimum full-read count before a file is eligible for pinning (2–20)</span>
+                        </label>
+                        <input type="number" class="field-input" min={2} max={20} value={pinMinReads()} onInput={(e) => updateExp("pin_key_files.min_reads", Number(e.currentTarget.value))} style={{ width: "80px" }} />
+                      </div>
+                    </Show>
+                  </div>
                 </div>
               </div>
             );
