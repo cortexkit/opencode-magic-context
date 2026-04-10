@@ -125,7 +125,13 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
 
         this.initPromise = (async () => {
             try {
-                const transformersModule = (await import("@huggingface/transformers")) as Record<
+                // Non-literal import specifier prevents Bun from eagerly resolving
+                // @huggingface/transformers at plugin load time. Desktop sidecar spawns
+                // hit ENOENT on JSDoc-referenced files inside transformers' webpack dist
+                // when the literal string triggers Bun's static module analysis.
+                // See: https://github.com/cortexkit/opencode-magic-context/issues/4
+                const transformersSpec = `@huggingface/${"transformers"}`;
+                const transformersModule = (await import(transformersSpec)) as Record<
                     string,
                     unknown
                 >;
