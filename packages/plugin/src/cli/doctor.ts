@@ -1,3 +1,4 @@
+import { execSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, platform, tmpdir } from "node:os";
@@ -7,8 +8,10 @@ import { detectConflicts } from "../shared/conflict-detector";
 import { fixConflicts } from "../shared/conflict-fixer";
 import { ensureTuiPluginEntry } from "../shared/tui-config";
 import { detectConfigPaths } from "./config-paths";
+import { collectDiagnostics } from "./diagnostics";
+import { bundleIssueReport } from "./logs";
 import { isOpenCodeInstalled } from "./opencode-helpers";
-import { intro, log, outro } from "./prompts";
+import { confirm, intro, log, outro, spinner, text } from "./prompts";
 
 const PLUGIN_NAME = "@cortexkit/opencode-magic-context";
 const PLUGIN_ENTRY_WITH_VERSION = `${PLUGIN_NAME}@latest`;
@@ -105,7 +108,107 @@ async function clearPluginCache(force = false): Promise<{
     }
 }
 
-export async function runDoctor(options: { force?: boolean } = {}): Promise<number> {
+// ── Issue flow ──────────────────────────────────────────────────────
+
+function isGhInstalled(): boolean {
+    try {
+        execSync("gh --version", { stdio: "pipe" });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function openBrowser(url: string): void {
+    try {
+        if (process.platform === "darwin") {
+            const child = spawnSync("open", [url], { stdio: "ignore" });
+            if (child.status === 0) return;
+        } else if (process.platform === "linux") {
+            const child = spawnSync("xdg-open", [url], { stdio: "ignore" });
+            if (child.status === 0) return;
+        } else if (process.platform === "win32") {
+            const child = spawnSync("cmd", ["/c", "start", "", url], { stdio: "ignore" });
+            if (child.status === 0) return;
+        }
+    } catch {
+        // Best-effort only.
+    }
+}
+
+async function runIssueFlow(): Promise<number> {
+    intro("Magic Context Issue Report");
+
+    const title = await text("Issue title", {
+        placeholder: "Short summary of the problem",
+        validate: (value) => (value.trim() ? undefined : "Title is required"),
+    });
+    const description = await text("Issue description", {
+        placeholder: "Describe what happened, what you expected, and repro steps",
+        validate: (value) => (value.trim() ? undefined : "Description is required"),
+    });
+
+    const s = spinner();
+    s.start("Collecting diagnostics");
+
+    try {
+        const report = await collectDiagnostics();
+        const bundled = await bundleIssueReport(report, description, title);
+        s.stop(`Report written to ${bundled.path}`);
+
+        const shouldSubmit = await confirm("Submit this issue on GitHub now?", true);
+        if (shouldSubmit && isGhInstalled()) {
+            const result = spawnSync(
+                "gh",
+                [
+                    "issue",
+                    "create",
+                    "-R",
+                    "cortexkit/opencode-magic-context",
+                    "--title",
+                    title,
+                    "--body-file",
+                    bundled.path,
+                ],
+                { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+            );
+
+            if (result.status === 0) {
+                log.success(result.stdout.trim());
+                outro("Issue submitted — thanks for the report!");
+                return 0;
+            }
+
+            log.warn(result.stderr.trim() || "gh issue create failed");
+        } else if (shouldSubmit && !isGhInstalled()) {
+            log.warn("gh CLI not found — falling back to browser");
+        }
+
+        const url = `https://github.com/cortexkit/opencode-magic-context/issues/new?title=${encodeURIComponent(title)}&template=bug_report.yml`;
+        log.info(
+            `Open this URL and paste the contents of ${bundled.path} into the Diagnostics field:`,
+        );
+        log.info(url);
+        openBrowser(url);
+        outro("Issue report ready");
+        return 0;
+    } catch (error) {
+        s.stop("Diagnostic collection failed");
+        log.error(error instanceof Error ? error.message : String(error));
+        outro("Issue report failed");
+        return 1;
+    }
+}
+
+// ── Main doctor entry ───────────────────────────────────────────────
+
+export async function runDoctor(
+    options: { force?: boolean; issue?: boolean } = {},
+): Promise<number> {
+    if (options.issue) {
+        return runIssueFlow();
+    }
+
     intro("Magic Context Doctor");
 
     let issues = 0;

@@ -147,6 +147,12 @@ Use `--force` to force-clear the plugin cache even when versions match (fixes br
 bunx @cortexkit/opencode-magic-context@latest doctor --force
 ```
 
+Hit a real bug? Use `--issue` to collect environment, sanitized config, and the last 200 log lines into a ready-to-submit report. It can also open the issue directly via `gh` if you have it installed:
+
+```bash
+bunx @cortexkit/opencode-magic-context@latest doctor --issue
+```
+
 ---
 
 ## What Your Agent Gets

@@ -1,5 +1,6 @@
 import {
     confirm as clackConfirm,
+    text as clackText,
     intro,
     isCancel,
     log,
@@ -25,6 +26,30 @@ export async function confirm(message: string, defaultYes = true): Promise<boole
     });
     handleCancel(result);
     return result as boolean;
+}
+
+export async function text(
+    message: string,
+    options: {
+        placeholder?: string;
+        initialValue?: string;
+        validate?: (value: string) => string | undefined;
+    } = {},
+): Promise<string> {
+    const result = await clackText({
+        message,
+        placeholder: options.placeholder,
+        initialValue: options.initialValue,
+        validate: options.validate
+            ? (value) => {
+                  const str = typeof value === "string" ? value : "";
+                  const error = options.validate?.(str);
+                  return error ?? undefined;
+              }
+            : undefined,
+    });
+    handleCancel(result);
+    return result as string;
 }
 
 export async function selectOne(

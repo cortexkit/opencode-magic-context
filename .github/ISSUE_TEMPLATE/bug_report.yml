@@ -1,0 +1,77 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Magic Context
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! To make debugging faster, please run:
+
+        ```
+        bunx @cortexkit/opencode-magic-context@latest doctor --issue
+        ```
+
+        That command collects environment info, your sanitized config, and the last 200 log lines into a local file. You can paste its contents into the Diagnostics field below, or let it submit the issue directly via `gh`.
+
+  - type: input
+    id: title
+    attributes:
+      label: Short description
+      placeholder: "ctx_reduce is not dropping tool outputs even after execute threshold"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem, what you expected, and what you observed. Include repro steps if you have them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste the output of `bunx @cortexkit/opencode-magic-context@latest doctor --issue` here, or fill in the sections below manually.
+      render: markdown
+
+  - type: input
+    id: plugin_version
+    attributes:
+      label: Plugin version
+      placeholder: "0.8.6"
+
+  - type: input
+    id: opencode_version
+    attributes:
+      label: OpenCode version
+      placeholder: "1.4.3"
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "macOS arm64 / linux x64 / windows x64"
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Client
+      options:
+        - OpenCode Desktop
+        - OpenCode TUI (CLI)
+        - OpenCode Web
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output (optional)
+      description: |
+        Contents of the magic-context log, trimmed to the relevant section and sanitized
+        (remove your username and home path). The log lives under the system temp directory —
+        on macOS/Linux it's typically `/tmp/magic-context.log` or under `$TMPDIR`.
+      render: shell
