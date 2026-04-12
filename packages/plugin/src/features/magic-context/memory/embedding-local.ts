@@ -1,4 +1,7 @@
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { DEFAULT_LOCAL_EMBEDDING_MODEL } from "../../../config/schema/magic-context";
+import { getOpenCodeStorageDir } from "../../../shared/data-path";
 import { log } from "../../../shared/logger";
 import type { EmbeddingProvider } from "./embedding-provider";
 
@@ -155,10 +158,32 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
                     string,
                     unknown
                 >;
-                const env = transformersModule.env as { logLevel?: unknown };
+                const env = transformersModule.env as {
+                    logLevel?: unknown;
+                    cacheDir?: string;
+                };
                 const LogLevel = transformersModule.LogLevel as Record<string, unknown> | undefined;
                 if (LogLevel && "ERROR" in LogLevel) {
                     env.logLevel = LogLevel.ERROR;
+                }
+
+                // Set a stable model cache directory outside of node_modules.
+                // On Windows, the default .cache inside the npm cached install
+                // (e.g. ~\.cache\opencode\packages\...\node_modules\@huggingface\transformers\.cache)
+                // can be inaccessible or non-writable, causing "Unable to get model file path
+                // or buffer" failures. Using our own storage dir survives plugin updates too.
+                const modelCacheDir = join(
+                    getOpenCodeStorageDir(),
+                    "plugin",
+                    "magic-context",
+                    "models",
+                );
+                try {
+                    mkdirSync(modelCacheDir, { recursive: true });
+                    env.cacheDir = modelCacheDir;
+                } catch {
+                    // Non-fatal — fall back to library default if we can't create the dir
+                    log("[magic-context] could not create model cache dir, using library default");
                 }
                 const createPipeline = transformersModule.pipeline as CreateEmbeddingPipeline;
 

@@ -4,21 +4,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub fn resolve_db_path() -> Option<PathBuf> {
-    // The magic-context plugin uses ~/.local/share/opencode/... on macOS and Linux
-    // (XDG-style), and %APPDATA%/opencode/... on Windows.
-    let data_dir = if cfg!(target_os = "windows") {
-        dirs::data_dir()?
-    } else {
-        // XDG_DATA_HOME or ~/.local/share (matches plugin behavior)
-        std::env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".local")
-                    .join("share")
-            })
-    };
+    // The magic-context plugin uses XDG_DATA_HOME or ~/.local/share on ALL platforms
+    // (see packages/plugin/src/shared/data-path.ts). On Windows this means
+    // C:\Users\<user>\.local\share — NOT %APPDATA%.
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".local")
+                .join("share")
+        });
     let db_path = data_dir
         .join("opencode")
         .join("storage")
@@ -33,18 +29,15 @@ pub fn resolve_db_path() -> Option<PathBuf> {
 }
 
 pub fn resolve_opencode_db_path() -> Option<PathBuf> {
-    let data_dir = if cfg!(target_os = "windows") {
-        dirs::data_dir()?
-    } else {
-        std::env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".local")
-                    .join("share")
-            })
-    };
+    // OpenCode also uses XDG_DATA_HOME or ~/.local/share on all platforms.
+    let data_dir = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".local")
+                .join("share")
+        });
     let db_path = data_dir.join("opencode").join("opencode.db");
     if db_path.exists() {
         Some(db_path)
