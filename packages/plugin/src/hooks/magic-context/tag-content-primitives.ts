@@ -1,7 +1,7 @@
 import type { ThinkingLikePart } from "./tag-messages";
 
 const encoder = new TextEncoder();
-const TAG_PREFIX_REGEX = /^§\d+§\s*/;
+const TAG_PREFIX_REGEX = /^(?:§\d+§\s*)+/;
 
 export function byteSize(value: string): number {
     return encoder.encode(value).length;
