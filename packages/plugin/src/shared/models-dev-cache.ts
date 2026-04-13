@@ -60,7 +60,15 @@ function loadModelsDevLimits(): Map<string, number> {
             const raw = readFileSync(modelsJsonPath, "utf-8");
             const data = JSON.parse(raw) as Record<
                 string,
-                { models?: Record<string, { limit?: { context?: number } }> }
+                {
+                    models?: Record<
+                        string,
+                        {
+                            limit?: { context?: number };
+                            experimental?: { modes?: Record<string, unknown> };
+                        }
+                    >;
+                }
             >;
 
             for (const [providerId, provider] of Object.entries(data)) {
@@ -69,6 +77,14 @@ function loadModelsDevLimits(): Map<string, number> {
                     const context = model?.limit?.context;
                     if (typeof context === "number" && context > 0) {
                         limits.set(`${providerId}/${modelId}`, context);
+                        // OpenCode creates derived model IDs from experimental.modes
+                        // e.g. gpt-5.4 + modes.fast → gpt-5.4-fast (inherits parent limit)
+                        const modes = model?.experimental?.modes;
+                        if (modes && typeof modes === "object") {
+                            for (const mode of Object.keys(modes)) {
+                                limits.set(`${providerId}/${modelId}-${mode}`, context);
+                            }
+                        }
                     }
                 }
             }
