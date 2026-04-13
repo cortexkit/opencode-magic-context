@@ -246,21 +246,33 @@ export async function runDoctor(
             const raw = readFileSync(paths.opencodeConfig, "utf-8");
             const config = parse(raw) as Record<string, unknown>;
             const plugins = Array.isArray(config?.plugin) ? config.plugin : [];
-            const hasPlugin = (plugins as unknown[]).some(
-                (p: unknown) =>
-                    typeof p === "string" &&
-                    (p === PLUGIN_NAME ||
-                        p.startsWith(`${PLUGIN_NAME}@`) ||
-                        p.includes("opencode-magic-context")),
+            const pluginList = (plugins as unknown[]).filter(
+                (p): p is string => typeof p === "string",
+            );
+            const existingIdx = pluginList.findIndex(
+                (p) =>
+                    p === PLUGIN_NAME ||
+                    p.startsWith(`${PLUGIN_NAME}@`) ||
+                    p.includes("opencode-magic-context"),
             );
             const configName =
                 paths.opencodeConfigFormat === "jsonc" ? "opencode.jsonc" : "opencode.json";
-            if (hasPlugin) {
+            if (existingIdx >= 0 && pluginList[existingIdx] === PLUGIN_ENTRY_WITH_VERSION) {
                 log.success(`Plugin registered in ${configName}`);
+            } else if (existingIdx >= 0) {
+                // Upgrade pinned/versionless entry to @latest
+                const oldEntry = pluginList[existingIdx];
+                pluginList[existingIdx] = PLUGIN_ENTRY_WITH_VERSION;
+                config.plugin = pluginList;
+                writeFileSync(paths.opencodeConfig, `${stringify(config, null, 2)}\n`);
+                log.success(
+                    `Upgraded plugin entry in ${configName}: ${oldEntry} → ${PLUGIN_ENTRY_WITH_VERSION}`,
+                );
+                fixed++;
             } else {
                 // Auto-add plugin entry — preserves comments
-                const updatedPlugins = [...(plugins as unknown[]), PLUGIN_ENTRY_WITH_VERSION];
-                config.plugin = updatedPlugins;
+                pluginList.push(PLUGIN_ENTRY_WITH_VERSION);
+                config.plugin = pluginList;
                 writeFileSync(paths.opencodeConfig, `${stringify(config, null, 2)}\n`);
                 log.success(`Added plugin to ${configName}`);
                 fixed++;
