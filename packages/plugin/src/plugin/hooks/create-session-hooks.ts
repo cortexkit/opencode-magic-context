@@ -8,13 +8,15 @@ import { DEFAULT_PROTECTED_TAGS } from "../../features/magic-context/defaults";
 import { createScheduler } from "../../features/magic-context/scheduler";
 import { createTagger } from "../../features/magic-context/tagger";
 import { createMagicContextHook } from "../../hooks/magic-context";
+import type { LiveSessionState } from "../../hooks/magic-context/live-session-state";
 import type { PluginContext } from "../types";
 
 export function createSessionHooks(args: {
     ctx: PluginContext;
     pluginConfig: MagicContextPluginConfig;
+    liveSessionState: LiveSessionState;
 }) {
-    const { ctx, pluginConfig } = args;
+    const { ctx, pluginConfig, liveSessionState } = args;
 
     if (pluginConfig.enabled !== true) {
         return { magicContext: null };
@@ -34,6 +36,7 @@ export function createSessionHooks(args: {
             tagger,
             scheduler,
             compactionHandler,
+            liveSessionState,
             config: {
                 protected_tags: pluginConfig.protected_tags ?? DEFAULT_PROTECTED_TAGS,
                 ctx_reduce_enabled: pluginConfig.ctx_reduce_enabled,

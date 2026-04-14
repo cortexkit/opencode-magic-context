@@ -21,6 +21,7 @@ const TOOL_HEAVY_TURN_REMINDER_TEXT =
 
 export type LiveModelBySession = Map<string, { providerID: string; modelID: string }>;
 export type VariantBySession = Map<string, string | undefined>;
+export type AgentBySession = Map<string, string>;
 export type RecentReduceBySession = Map<string, number>;
 export type ToolUsageSinceUserTurn = Map<string, number>;
 export type FlushedSessions = Set<string>;
@@ -31,14 +32,18 @@ export function getLiveNotificationParams(
     sessionId: string,
     liveModelBySession: LiveModelBySession,
     variantBySession: VariantBySession,
+    agentBySession?: AgentBySession,
 ): {
+    agent?: string;
     variant?: string;
     providerId?: string;
     modelId?: string;
 } {
     const model = liveModelBySession.get(sessionId);
     const variant = variantBySession.get(sessionId);
+    const agent = agentBySession?.get(sessionId);
     return {
+        ...(agent ? { agent } : {}),
         ...(variant ? { variant } : {}),
         ...(model ? { providerId: model.providerID, modelId: model.modelID } : {}),
     };
@@ -49,11 +54,12 @@ export function createChatMessageHook(args: {
     toolUsageSinceUserTurn: ToolUsageSinceUserTurn;
     recentReduceBySession: RecentReduceBySession;
     variantBySession: VariantBySession;
+    agentBySession: AgentBySession;
     flushedSessions: FlushedSessions;
     lastHeuristicsTurnId: LastHeuristicsTurnId;
     ctxReduceEnabled?: boolean;
 }) {
-    return async (input: { sessionID?: string; variant?: string }) => {
+    return async (input: { sessionID?: string; variant?: string; agent?: string }) => {
         const sessionId = input.sessionID;
         if (!sessionId) return;
 
@@ -77,6 +83,9 @@ export function createChatMessageHook(args: {
 
         const previousVariant = args.variantBySession.get(sessionId);
         args.variantBySession.set(sessionId, input.variant);
+        if (input.agent) {
+            args.agentBySession.set(sessionId, input.agent);
+        }
         if (
             previousVariant !== undefined &&
             input.variant !== undefined &&
@@ -101,6 +110,7 @@ export function createEventHook(args: {
     db: Parameters<typeof getOrCreateSessionMeta>[0];
     liveModelBySession: LiveModelBySession;
     variantBySession: VariantBySession;
+    agentBySession: AgentBySession;
     recentReduceBySession: RecentReduceBySession;
     toolUsageSinceUserTurn: ToolUsageSinceUserTurn;
     emergencyNudgeFired: EmergencyNudgeFired;
@@ -150,6 +160,7 @@ export function createEventHook(args: {
         if (input.event.type === "session.deleted") {
             args.liveModelBySession.delete(sessionId);
             args.variantBySession.delete(sessionId);
+            args.agentBySession.delete(sessionId);
             args.recentReduceBySession.delete(sessionId);
             args.toolUsageSinceUserTurn.delete(sessionId);
             args.emergencyNudgeFired.delete(sessionId);
@@ -191,6 +202,7 @@ export function createEventHook(args: {
         try {
             const model = args.liveModelBySession.get(sessionId);
             const variant = args.variantBySession.get(sessionId);
+            const agent = args.agentBySession.get(sessionId);
             // Intentional: feature-detection cast for optional/experimental OpenCode promptAsync API
             const c = args.client as {
                 session: { promptAsync?: (opts: unknown) => Promise<unknown> };
@@ -203,6 +215,7 @@ export function createEventHook(args: {
             await c.session.promptAsync({
                 path: { id: sessionId },
                 body: {
+                    ...(agent ? { agent } : {}),
                     ...(model ? { model } : {}),
                     ...(variant ? { variant } : {}),
                     parts: [{ type: "text", text: nudgeText }],

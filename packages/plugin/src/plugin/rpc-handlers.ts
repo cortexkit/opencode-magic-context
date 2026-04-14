@@ -6,6 +6,8 @@ import type { Database } from "bun:sqlite";
 import type { MagicContextConfig } from "../config/schema/magic-context";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
 import { openDatabase } from "../features/magic-context/storage";
+import { getLiveNotificationParams } from "../hooks/magic-context/hook-handlers";
+import type { LiveSessionState } from "../hooks/magic-context/live-session-state";
 import { log } from "../shared/logger";
 import { drainNotifications } from "../shared/rpc-notifications";
 import type { MagicContextRpcServer } from "../shared/rpc-server";
@@ -420,12 +422,20 @@ export function registerRpcHandlers(
         directory: string;
         config: MagicContextConfig;
         client: unknown;
+        liveSessionState: LiveSessionState;
     },
 ): void {
-    const { directory, config } = args;
+    const { directory, config, liveSessionState } = args;
 
     // Read config as raw object for per-model resolution
     const rawConfig = config as unknown as Record<string, unknown>;
+    const getNotificationParams = (sessionId: string) =>
+        getLiveNotificationParams(
+            sessionId,
+            liveSessionState.liveModelBySession,
+            liveSessionState.variantBySession,
+            liveSessionState.agentBySession,
+        );
 
     rpcServer.handle("sidebar-snapshot", async (params) => {
         const sessionId = String(params.sessionId ?? "");
@@ -488,10 +498,15 @@ export function registerRpcHandlers(
             tokenBudget: config.compartment_token_budget ?? DEFAULT_COMPARTMENT_TOKEN_BUDGET,
             historianTimeoutMs: config.historian_timeout_ms ?? DEFAULT_HISTORIAN_TIMEOUT_MS,
             directory,
-            getNotificationParams: () => ({}),
+            getNotificationParams: () => getNotificationParams(sessionId),
         })
             .then((result: string) => {
-                void sendIgnoredMessage(args.client, sessionId, result, {}).catch(() => {});
+                void sendIgnoredMessage(
+                    args.client,
+                    sessionId,
+                    result,
+                    getNotificationParams(sessionId),
+                ).catch(() => {});
             })
             .catch((error: unknown) => {
                 log("[rpc] recomp failed:", error);

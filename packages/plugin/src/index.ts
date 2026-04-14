@@ -10,6 +10,7 @@ import {
     COMPARTMENT_AGENT_SYSTEM_PROMPT,
     USER_OBSERVATIONS_APPENDIX,
 } from "./hooks/magic-context/compartment-prompt";
+import { createLiveSessionState } from "./hooks/magic-context/live-session-state";
 import { cleanupConflictWarnings, sendConflictWarning } from "./plugin/conflict-warning-hook";
 import { startDreamScheduleTimer } from "./plugin/dream-timer";
 import { createEventHandler } from "./plugin/event";
@@ -54,6 +55,8 @@ const plugin: Plugin = async (ctx) => {
                 );
                 const sessionId = (sessions as any)?.data?.[0]?.id ?? (sessions as any)?.[0]?.id;
                 if (sessionId) {
+                    // This runs before any active session necessarily reports its live agent,
+                    // so keep the startup warning unbound to a specific agent on purpose.
                     await sendIgnoredMessage(ctx.client, sessionId, warningText, {});
                 }
             } catch {
@@ -74,9 +77,12 @@ const plugin: Plugin = async (ctx) => {
         }
     }
 
+    const liveSessionState = createLiveSessionState();
+
     const hooks = createSessionHooks({
         ctx,
         pluginConfig,
+        liveSessionState,
     });
 
     const tools = createToolRegistry({
@@ -116,6 +122,7 @@ const plugin: Plugin = async (ctx) => {
             directory: ctx.directory,
             config: pluginConfig,
             client: ctx.client,
+            liveSessionState,
         });
         rpcServer.start().catch((err) => {
             log(`[magic-context] RPC server failed to start: ${err}`);

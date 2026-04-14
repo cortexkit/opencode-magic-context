@@ -41,6 +41,7 @@ import {
     createToolExecuteAfterHook,
     getLiveNotificationParams,
 } from "./hook-handlers";
+import type { LiveSessionState } from "./live-session-state";
 import { sendIgnoredMessage } from "./send-session-notification";
 import { createSystemPromptHashHandler } from "./system-prompt-hash";
 
@@ -55,6 +56,7 @@ export interface MagicContextDeps {
     scheduler: Scheduler;
     onSessionCacheInvalidated?: (sessionId: string) => void;
     compactionHandler: ReturnType<typeof createCompactionHandler>;
+    liveSessionState?: LiveSessionState;
     config: {
         protected_tags: number;
         ctx_reduce_enabled?: boolean;
@@ -151,8 +153,12 @@ export function createMagicContextHook(deps: MagicContextDeps) {
     const flushedSessions = new Set<string>();
     const lastHeuristicsTurnId = new Map<string, string>();
     const commitSeenLastPass = new Map<string, boolean>();
-    const variantBySession = new Map<string, string | undefined>();
-    const liveModelBySession = new Map<string, { providerID: string; modelID: string }>();
+    const variantBySession =
+        deps.liveSessionState?.variantBySession ?? new Map<string, string | undefined>();
+    const liveModelBySession =
+        deps.liveSessionState?.liveModelBySession ??
+        new Map<string, { providerID: string; modelID: string }>();
+    const agentBySession = deps.liveSessionState?.agentBySession ?? new Map<string, string>();
     const recentReduceBySession = new Map<string, number>();
     const toolUsageSinceUserTurn = new Map<string, number>();
     const ctxReduceEnabled = deps.config.ctx_reduce_enabled !== false;
@@ -195,7 +201,12 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         executeThresholdPercentage: deps.config.execute_threshold_percentage,
         historianTimeoutMs: deps.config.historian_timeout_ms ?? DEFAULT_HISTORIAN_TIMEOUT_MS,
         getNotificationParams: (sessionId) =>
-            getLiveNotificationParams(sessionId, liveModelBySession, variantBySession),
+            getLiveNotificationParams(
+                sessionId,
+                liveModelBySession,
+                variantBySession,
+                agentBySession,
+            ),
         getModelKey: (sessionId) => {
             const model = liveModelBySession.get(sessionId);
             return resolveModelKey(model?.providerID, model?.modelID);
@@ -293,11 +304,21 @@ export function createMagicContextHook(deps: MagicContextDeps) {
                     return model ? `${model.providerID}/${model.modelID}` : undefined;
                 })(),
                 getNotificationParams: () =>
-                    getLiveNotificationParams(sessionId, liveModelBySession, variantBySession),
+                    getLiveNotificationParams(
+                        sessionId,
+                        liveModelBySession,
+                        variantBySession,
+                        agentBySession,
+                    ),
             }),
         sendNotification: async (sessionId, text, params) => {
             await sendIgnoredMessage(deps.client, sessionId, text, {
-                ...getLiveNotificationParams(sessionId, liveModelBySession, variantBySession),
+                ...getLiveNotificationParams(
+                    sessionId,
+                    liveModelBySession,
+                    variantBySession,
+                    agentBySession,
+                ),
                 ...params,
             });
         },
@@ -356,6 +377,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         db,
         liveModelBySession,
         variantBySession,
+        agentBySession,
         recentReduceBySession,
         toolUsageSinceUserTurn,
         emergencyNudgeFired,
@@ -376,6 +398,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             toolUsageSinceUserTurn,
             recentReduceBySession,
             variantBySession,
+            agentBySession,
             flushedSessions,
             lastHeuristicsTurnId,
             ctxReduceEnabled,

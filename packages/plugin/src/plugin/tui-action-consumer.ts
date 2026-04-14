@@ -2,6 +2,8 @@ import type { MagicContextConfig } from "../config/schema/magic-context";
 import { consumeMessages, sendTuiToast } from "../features/magic-context/plugin-messages";
 import { openDatabase } from "../features/magic-context/storage";
 import { executeContextRecomp } from "../hooks/magic-context/compartment-runner";
+import { getLiveNotificationParams } from "../hooks/magic-context/hook-handlers";
+import type { LiveSessionState } from "../hooks/magic-context/live-session-state";
 import { sendIgnoredMessage } from "../hooks/magic-context/send-session-notification";
 import { log } from "../shared/logger";
 import type { PluginContext } from "./types";
@@ -21,8 +23,16 @@ export function startTuiActionConsumer(args: {
     client: PluginContext["client"];
     directory: string;
     config: MagicContextConfig;
+    liveSessionState: LiveSessionState;
 }): (() => void) | undefined {
-    const { client, directory, config } = args;
+    const { client, directory, config, liveSessionState } = args;
+    const getNotificationParams = (sessionId: string) =>
+        getLiveNotificationParams(
+            sessionId,
+            liveSessionState.liveModelBySession,
+            liveSessionState.variantBySession,
+            liveSessionState.agentBySession,
+        );
 
     const timer = setInterval(() => {
         try {
@@ -50,11 +60,16 @@ export function startTuiActionConsumer(args: {
                         historianTimeoutMs:
                             config.historian_timeout_ms ?? DEFAULT_HISTORIAN_TIMEOUT_MS,
                         directory,
-                        getNotificationParams: () => ({}),
+                        getNotificationParams: () => getNotificationParams(sessionId),
                     })
                         .then((result: string) => {
                             sendTuiToast(db, "Recomp completed", { variant: "success", sessionId });
-                            void sendIgnoredMessage(client, sessionId, result, {}).catch(() => {});
+                            void sendIgnoredMessage(
+                                client,
+                                sessionId,
+                                result,
+                                getNotificationParams(sessionId),
+                            ).catch(() => {});
                         })
                         .catch((error: unknown) => {
                             log("[magic-context] TUI recomp failed:", error);
