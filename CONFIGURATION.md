@@ -19,7 +19,7 @@ The setup wizard adds this automatically.
 If something isn't working, run the doctor to auto-detect and fix common issues:
 
 ```bash
-bunx @cortexkit/opencode-magic-context@latest doctor
+bunx --bun @cortexkit/opencode-magic-context@latest doctor
 ```
 
 Doctor checks: OpenCode installation, plugin registration, `magic-context.jsonc` existence, conflicts (compaction, DCP, OMO hooks), and TUI sidebar configuration. It auto-fixes what it can.
@@ -71,6 +71,7 @@ Higher-tier models with longer cache windows benefit from a longer TTL. Setting 
 | `compartment_token_budget` | `number` | `20000` | Token budget for historian input chunks. |
 | `historian_timeout_ms` | `number` | `300000` | Timeout per historian call (ms). |
 | `history_budget_percentage` | `number` (0–1) | `0.15` | Fraction of usable context reserved for the history block. Triggers compression when exceeded. |
+| `compaction_markers` | `boolean` | `true` | Inject compaction boundaries into OpenCode's DB after historian publishes. Reduces transform input size for long sessions. |
 | `commit_cluster_trigger` | `object` | See below | Controls the commit-cluster historian trigger. |
 
 ### `commit_cluster_trigger`
@@ -268,14 +269,6 @@ It is useful when starting a new session. It's better to choose a fast and cheap
 
 ## Experimental Features
 
-### `experimental_compaction_markers`
-
-| Key | Type | Default |
-|-----|------|---------|
-| `experimental.compaction_markers` | `boolean` | `false` |
-
-When enabled, after historian publishes compartments a compaction boundary is injected into OpenCode's message/part tables. This causes `filterCompacted` to stop at the boundary, dramatically reducing the number of messages processed per transform pass.
-
 ### `experimental_user_memories`
 
 | Key | Type | Default |
@@ -332,6 +325,7 @@ When enabled, dreamer analyzes which files each session's agent reads most frequ
   "protected_tags": 10,
   "auto_drop_tool_age": 50,
   "history_budget_percentage": 0.15,
+  "compaction_markers": true,
 
   "historian": {
     "model": "github-copilot/gpt-5.4",
@@ -364,7 +358,6 @@ When enabled, dreamer analyzes which files each session's agent reads most frequ
   },
 
   "experimental": {
-    "compaction_markers": false,
     "user_memories": {
       "enabled": false,
       "promotion_threshold": 3

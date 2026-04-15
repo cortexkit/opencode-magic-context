@@ -3,7 +3,7 @@
  *
  * Coordinates compaction marker injection/update/removal with historian
  * publication. Called after compartments are published, behind the
- * `experimental_compaction_markers` config flag.
+ * `compaction_markers` config flag (default: true).
  *
  * The marker summary text is a static placeholder — the real <session-history>
  * is injected by the transform pipeline via inject-compartments.ts. The marker

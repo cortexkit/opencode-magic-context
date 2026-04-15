@@ -132,11 +132,14 @@ async function getActiveProjectSessionIds(args: {
             "../../../hooks/magic-context/read-session-db"
         );
         const projectSessionIds = withReadOnlySessionDb((openCodeDb) => {
+            // Magic-context stores project identity as "git:<hash>" but OpenCode's
+            // session table stores just the bare hash in project_id. Strip the prefix.
+            const bareIdentity = args.projectIdentity.replace(/^git:/, "");
             const rows = openCodeDb
                 .prepare(
                     "SELECT id FROM session WHERE project_id = ? AND parent_id IS NULL ORDER BY time_updated DESC",
                 )
-                .all(args.projectIdentity) as Array<{ id: string }>;
+                .all(bareIdentity) as Array<{ id: string }>;
             return new Set(rows.map((r) => r.id));
         });
 
@@ -209,6 +212,7 @@ async function identifyKeyFilesForSession(args: {
             args.sessionId,
             args.config.min_reads,
             args.config.token_budget,
+            args.sessionDirectory,
         );
         if (candidates.length === 0) {
             log(`[key-files][${args.sessionId}] no candidates found — skipping`);

@@ -88,10 +88,19 @@ export function getKeyFileCandidates(
     sessionId: string,
     minReads: number,
     tokenBudget: number,
+    projectDirectory?: string,
 ): FileReadStat[] {
     const stats = getSessionReadStats(openCodeDb, sessionId, minReads);
     const maxPerFileTokens = Math.min(tokenBudget / 2, 5000);
-    return stats.filter((s) => s.latestReadTokens > 0 && s.latestReadTokens <= maxPerFileTokens);
+    // Filter to files within the project directory — long-running sessions may have
+    // read files from other repos, which should not be pinned as key files.
+    const projectPrefix = projectDirectory ? projectDirectory.replace(/\/$/, "") + "/" : undefined;
+    return stats.filter(
+        (s) =>
+            s.latestReadTokens > 0 &&
+            s.latestReadTokens <= maxPerFileTokens &&
+            (!projectPrefix || s.filePath.startsWith(projectPrefix)),
+    );
 }
 
 /**

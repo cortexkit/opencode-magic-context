@@ -22,9 +22,9 @@ if (command === "setup") {
     console.log("    doctor --issue   Collect diagnostics and open a GitHub issue");
     console.log("");
     console.log("  Usage:");
-    console.log("    bunx @cortexkit/opencode-magic-context@latest setup");
-    console.log("    bunx @cortexkit/opencode-magic-context@latest doctor");
-    console.log("    bunx @cortexkit/opencode-magic-context@latest doctor --issue");
+    console.log("    bunx --bun @cortexkit/opencode-magic-context@latest setup");
+    console.log("    bunx --bun @cortexkit/opencode-magic-context@latest doctor");
+    console.log("    bunx --bun @cortexkit/opencode-magic-context@latest doctor --issue");
     console.log("");
     process.exit(command ? 1 : 0);
 }

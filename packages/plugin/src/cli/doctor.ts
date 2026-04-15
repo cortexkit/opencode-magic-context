@@ -70,7 +70,7 @@ async function clearPluginCache(force = false): Promise<{
         // Can't read cached version — proceed with clearing
     }
 
-    // Compare against our own version — when running via `bunx @cortexkit/opencode-magic-context@latest doctor`,
+    // Compare against our own version — when running via `bunx --bun @cortexkit/opencode-magic-context@latest doctor`,
     // our package.json IS the latest published version. No network call needed.
     // Try multiple relative paths to handle both src/ and dist/ build output locations.
     const require = createRequire(import.meta.url);
@@ -240,6 +240,40 @@ export async function runDoctor(
         log.info("  Run 'setup' to create one with model recommendations");
     }
 
+    // 3b. Migrate deprecated experimental config keys in magic-context.jsonc
+    if (existsSync(paths.magicContextConfig)) {
+        try {
+            const mcRaw = readFileSync(paths.magicContextConfig, "utf-8");
+            const mcConfig = parse(mcRaw) as Record<string, unknown>;
+            let mcChanged = false;
+
+            // Migrate experimental.compaction_markers → top-level compaction_markers
+            const experimental = mcConfig.experimental as Record<string, unknown> | undefined;
+            if (experimental && "compaction_markers" in experimental) {
+                if (!("compaction_markers" in mcConfig)) {
+                    // Promote value to top level only if not already set
+                    mcConfig.compaction_markers = experimental.compaction_markers;
+                }
+                delete experimental.compaction_markers;
+                mcChanged = true;
+                // Clean up empty experimental object
+                if (Object.keys(experimental).length === 0) {
+                    delete mcConfig.experimental;
+                }
+                log.success(
+                    "Migrated experimental.compaction_markers → compaction_markers (now default: true)",
+                );
+                fixed++;
+            }
+
+            if (mcChanged) {
+                writeFileSync(paths.magicContextConfig, `${stringify(mcConfig, null, 2)}\n`);
+            }
+        } catch {
+            log.warn("Could not migrate deprecated config keys in magic-context.jsonc");
+        }
+    }
+
     // 4. Check plugin is in opencode.json
     if (paths.opencodeConfigFormat !== "none") {
         try {
@@ -260,15 +294,27 @@ export async function runDoctor(
             if (existingIdx >= 0 && pluginList[existingIdx] === PLUGIN_ENTRY_WITH_VERSION) {
                 log.success(`Plugin registered in ${configName}`);
             } else if (existingIdx >= 0) {
-                // Upgrade pinned/versionless entry to @latest
                 const oldEntry = pluginList[existingIdx];
-                pluginList[existingIdx] = PLUGIN_ENTRY_WITH_VERSION;
-                config.plugin = pluginList;
-                writeFileSync(paths.opencodeConfig, `${stringify(config, null, 2)}\n`);
-                log.success(
-                    `Upgraded plugin entry in ${configName}: ${oldEntry} → ${PLUGIN_ENTRY_WITH_VERSION}`,
-                );
-                fixed++;
+                const isPinned =
+                    oldEntry !== PLUGIN_NAME &&
+                    oldEntry !== PLUGIN_ENTRY_WITH_VERSION &&
+                    /^@cortexkit\/opencode-magic-context@\d/.test(oldEntry);
+
+                if (isPinned && !options.force) {
+                    // Warn but don't change — user intentionally pinned
+                    log.warn(
+                        `Plugin pinned to ${oldEntry} in ${configName} — use 'doctor --force' to upgrade`,
+                    );
+                } else {
+                    // Upgrade versionless entry to @latest, or --force upgrades pinned
+                    pluginList[existingIdx] = PLUGIN_ENTRY_WITH_VERSION;
+                    config.plugin = pluginList;
+                    writeFileSync(paths.opencodeConfig, `${stringify(config, null, 2)}\n`);
+                    log.success(
+                        `Upgraded plugin entry in ${configName}: ${oldEntry} → ${PLUGIN_ENTRY_WITH_VERSION}`,
+                    );
+                    fixed++;
+                }
             } else {
                 // Auto-add plugin entry — preserves comments
                 pluginList.push(PLUGIN_ENTRY_WITH_VERSION);
@@ -312,13 +358,46 @@ export async function runDoctor(
         log.success("Added TUI sidebar plugin to tui.json");
         log.warn("Restart OpenCode to see the sidebar");
         fixed++;
-    } else {
-        // Check if it's already there vs missing tui.json entirely
-        if (existsSync(paths.tuiConfig)) {
+    } else if (existsSync(paths.tuiConfig)) {
+        // Check for pinned version in tui config
+        try {
+            const tuiRaw = readFileSync(paths.tuiConfig, "utf-8");
+            const tuiConfig = parse(tuiRaw) as Record<string, unknown>;
+            const tuiPlugins = Array.isArray(tuiConfig?.plugin)
+                ? (tuiConfig.plugin as unknown[]).filter((p): p is string => typeof p === "string")
+                : [];
+            const tuiIdx = tuiPlugins.findIndex(
+                (p) => p === PLUGIN_NAME || p.startsWith(`${PLUGIN_NAME}@`),
+            );
+            if (tuiIdx >= 0) {
+                const tuiEntry = tuiPlugins[tuiIdx];
+                const tuiPinned =
+                    tuiEntry !== PLUGIN_NAME &&
+                    tuiEntry !== PLUGIN_ENTRY_WITH_VERSION &&
+                    /^@cortexkit\/opencode-magic-context@\d/.test(tuiEntry);
+                if (tuiPinned && !options.force) {
+                    log.warn(
+                        `TUI plugin pinned to ${tuiEntry} — use 'doctor --force' to upgrade`,
+                    );
+                } else if (tuiPinned && options.force) {
+                    tuiPlugins[tuiIdx] = PLUGIN_ENTRY_WITH_VERSION;
+                    tuiConfig.plugin = tuiPlugins;
+                    writeFileSync(paths.tuiConfig, `${stringify(tuiConfig, null, 2)}\n`);
+                    log.success(
+                        `Upgraded TUI plugin: ${tuiEntry} → ${PLUGIN_ENTRY_WITH_VERSION}`,
+                    );
+                    fixed++;
+                } else {
+                    log.success("TUI sidebar plugin configured");
+                }
+            } else {
+                log.success("TUI sidebar plugin configured");
+            }
+        } catch {
             log.success("TUI sidebar plugin configured");
-        } else {
-            log.success("TUI sidebar plugin configured (tui.json created)");
         }
+    } else {
+        log.success("TUI sidebar plugin configured (tui.json created)");
     }
 
     // 7. Check user memories + dreamer compatibility
@@ -364,7 +443,67 @@ export async function runDoctor(
         log.success("Plugin cache clean (no cached version found)");
     }
 
-    // 9. Show diagnostics info (log file, historian dumps)
+    // 9. Check for min-release-age / minimumReleaseAge restrictions
+    // OpenCode uses @npmcli/arborist (npm core) to install plugins, so .npmrc
+    // restrictions apply. Bun's bunfig.toml is checked too for users who install
+    // via bunx manually.
+    {
+        const ageWarnings: string[] = [];
+
+        // Check ~/.npmrc for min-release-age or before
+        const npmrcPath = join(homedir(), ".npmrc");
+        if (existsSync(npmrcPath)) {
+            try {
+                const npmrc = readFileSync(npmrcPath, "utf-8");
+                for (const line of npmrc.split("\n")) {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
+                    const [key] = trimmed.split("=").map((s) => s.trim());
+                    if (key === "min-release-age" || key === "before") {
+                        ageWarnings.push(`~/.npmrc has '${trimmed}'`);
+                    }
+                }
+            } catch {
+                // Can't read .npmrc — skip
+            }
+        }
+
+        // Check ~/.bunfig.toml for minimumReleaseAge
+        const bunfigPath = join(homedir(), ".bunfig.toml");
+        if (existsSync(bunfigPath)) {
+            try {
+                const bunfig = readFileSync(bunfigPath, "utf-8");
+                for (const line of bunfig.split("\n")) {
+                    const trimmed = line.trim();
+                    if (trimmed.startsWith("#")) continue;
+                    if (/minimumReleaseAge\s*=/.test(trimmed)) {
+                        ageWarnings.push(`~/.bunfig.toml has '${trimmed}'`);
+                    }
+                }
+            } catch {
+                // Can't read bunfig — skip
+            }
+        }
+
+        if (ageWarnings.length > 0) {
+            log.warn(
+                "Package manager min-release-age restriction detected — this can prevent OpenCode from installing the latest plugin version",
+            );
+            for (const w of ageWarnings) {
+                log.info(`  ${w}`);
+            }
+            log.info(
+                "  If the plugin stays on an old version after doctor --force, this is the likely cause.",
+            );
+            log.info(
+                "  Workaround: temporarily remove the restriction, restart OpenCode, then re-enable it.",
+            );
+            issues++;
+        }
+    }
+
+    // 10. Show diagnostics info (log file, historian dumps)
+
     const logPath = join(tmpdir(), "magic-context.log");
     if (existsSync(logPath)) {
         const logStat = statSync(logPath);
@@ -400,7 +539,7 @@ export async function runDoctor(
         }
     }
 
-    // 10. Check OMO config
+    // 11. Check OMO config
     if (paths.omoConfig) {
         log.info(`OMO config found: ${paths.omoConfig}`);
     }

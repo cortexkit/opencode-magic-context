@@ -125,8 +125,8 @@ export interface MagicContextConfig {
         enabled: boolean;
         min_clusters: number;
     };
+    compaction_markers: boolean;
     experimental: {
-        compaction_markers: boolean;
         user_memories: {
             enabled: boolean;
             promotion_threshold: number;
@@ -205,6 +205,10 @@ export const MagicContextConfigSchema = z
                 min_clusters: z.number().min(1).default(3),
             })
             .default({ enabled: true, min_clusters: 3 }),
+        /** Inject compaction markers into OpenCode's DB so transform receives only the live tail.
+         *  After historian publishes compartments, a compaction boundary is written into
+         *  OpenCode's message/part tables so older messages are skipped at load time. Default: true. */
+        compaction_markers: z.boolean().default(true),
         /** Embedding provider configuration */
         embedding: EmbeddingConfigSchema.default({
             provider: "local",
@@ -213,10 +217,6 @@ export const MagicContextConfigSchema = z
         /** Experimental features — gated behind flags, may change between releases. */
         experimental: z
             .object({
-                /** Inject compaction markers into OpenCode's DB so transform receives only the live tail.
-                 *  When enabled, after historian publishes compartments, a compaction boundary is written into
-                 *  OpenCode's message/part tables. Default: false. */
-                compaction_markers: z.boolean().default(false),
                 /** Extract user behavior observations from historian runs and promote recurring patterns
                  *  to stable user memories injected into all sessions. Requires dreamer. Default: false. */
                 user_memories: z
@@ -242,7 +242,6 @@ export const MagicContextConfigSchema = z
                     .default({ enabled: false, token_budget: 10000, min_reads: 4 }),
             })
             .default({
-                compaction_markers: false,
                 user_memories: { enabled: false, promotion_threshold: 3 },
                 pin_key_files: { enabled: false, token_budget: 10000, min_reads: 4 },
             }),

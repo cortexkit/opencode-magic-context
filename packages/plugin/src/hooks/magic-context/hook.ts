@@ -79,8 +79,8 @@ export interface MagicContextDeps {
         sidekick?: SidekickConfig;
         dreamer?: DreamerConfig;
         commit_cluster_trigger?: { enabled: boolean; min_clusters: number };
+        compaction_markers?: boolean;
         experimental?: {
-            compaction_markers?: boolean;
             user_memories?: { enabled: boolean; promotion_threshold: number };
             pin_key_files?: { enabled: boolean; token_budget: number; min_reads: number };
         };
@@ -216,7 +216,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             return model ? `${model.providerID}/${model.modelID}` : undefined;
         },
         projectPath,
-        experimentalCompactionMarkers: deps.config.experimental?.compaction_markers,
+        experimentalCompactionMarkers: deps.config.compaction_markers,
         experimentalUserMemories: deps.config.experimental?.user_memories?.enabled,
         liveModelBySession,
     });

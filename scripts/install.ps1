@@ -11,9 +11,23 @@ $package = "@cortexkit/opencode-magic-context"
 if (Get-Command bun -ErrorAction SilentlyContinue) {
     Write-Host "  → Using bun" -ForegroundColor Gray
     Write-Host ""
-    & bun x $package setup
+    & bun x --bun $package setup
 } elseif (Get-Command npx -ErrorAction SilentlyContinue) {
-    Write-Host "  → Using npx" -ForegroundColor Gray
+    # Check Node version — @clack/prompts requires styleText from node:util (Node >= 20.12)
+    $nodeVer = (node -v 2>$null) -replace '^v',''
+    $parts = $nodeVer.Split('.')
+    $major = [int]$parts[0]
+    $minor = [int]$parts[1]
+    if ($major -lt 20 -or ($major -eq 20 -and $minor -lt 12)) {
+        Write-Host "  ✗ Node.js $nodeVer is too old (requires >= 20.12)" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  Options:" -ForegroundColor Yellow
+        Write-Host "    • Install bun (recommended): irm bun.sh/install.ps1 | iex"
+        Write-Host "    • Upgrade Node.js: https://nodejs.org"
+        Write-Host ""
+        exit 1
+    }
+    Write-Host "  → Using npx (Node $nodeVer)" -ForegroundColor Gray
     Write-Host ""
     & npx -y $package setup
 } else {
@@ -21,7 +35,7 @@ if (Get-Command bun -ErrorAction SilentlyContinue) {
     Write-Host ""
     Write-Host "  Install one of:" -ForegroundColor Yellow
     Write-Host "    • bun:  irm bun.sh/install.ps1 | iex"
-    Write-Host "    • node: https://nodejs.org"
+    Write-Host "    • node: https://nodejs.org (>= 20.12)"
     Write-Host ""
     exit 1
 }

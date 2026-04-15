@@ -6,7 +6,7 @@
  * the transform hook receives only post-boundary messages instead
  * of the full session history.
  *
- * Gated behind `experimental_compaction_markers` config flag.
+ * Gated behind the `compaction_markers` config flag (default: true).
  *
  * ## What gets injected (3 rows):
  * 1. A `compaction` part on the boundary user message

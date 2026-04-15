@@ -47,8 +47,14 @@ export function ensureTuiPluginEntry(): boolean {
             if (plugins[existingIdx] === PLUGIN_ENTRY) {
                 return false; // Already @latest
             }
-            // Upgrade pinned version to @latest
-            plugins[existingIdx] = PLUGIN_ENTRY;
+            // Only upgrade versionless entries (bare package name) to @latest.
+            // Pinned versions (e.g. @0.8.10) are left as-is — user chose them intentionally.
+            const existing = plugins[existingIdx];
+            if (existing === PLUGIN_NAME) {
+                plugins[existingIdx] = PLUGIN_ENTRY;
+            } else {
+                return false; // Pinned version — don't touch
+            }
         } else {
             plugins.push(PLUGIN_ENTRY);
         }

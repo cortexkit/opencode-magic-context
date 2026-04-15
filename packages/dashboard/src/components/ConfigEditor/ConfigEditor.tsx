@@ -65,6 +65,7 @@ const FIELD_DEFS: FieldDef[] = [
   { key: "enabled", label: "Enabled", type: "boolean", description: "Enable the magic-context plugin", section: "General" },
   { key: "ctx_reduce_enabled", label: "Agent Controlled Reduction", type: "boolean", description: "Enable agent controlled reductions via ctx_reduce tool. When enabled, agent is prompted and nudged to choose what messages and tool calls to drop periodically. If disabled the system still works via auto drops based on message ages.", section: "General" },
   { key: "drop_tool_structure", label: "Drop Tool Structure", type: "boolean", description: "When enabled, dropped tool calls are fully removed. When disabled, tool input/output is truncated in place so tool structure stays visible.", section: "General", defaultValue: false },
+  { key: "compaction_markers", label: "Compaction Markers", type: "boolean", description: "Inject boundary into OpenCode's DB so transform only processes the live tail after historian compaction. Significantly reduces transform input size for long sessions.", section: "General", defaultValue: true },
   // Thresholds
   // cache_ttl and execute_threshold_percentage are rendered as custom PerModelField components
   { key: "nudge_interval_tokens", label: "Nudge Interval (tokens)", type: "number", description: "Token interval between rolling ctx_reduce nudges.", section: "General" },
@@ -853,12 +854,10 @@ function ConfigForm(props: {
           {/* Experimental Features */}
           {(() => {
             const exp = () => (getNestedValue(formData(), "experimental") as {
-              compaction_markers?: boolean;
               user_memories?: { enabled?: boolean; promotion_threshold?: number };
               pin_key_files?: { enabled?: boolean; token_budget?: number; min_reads?: number };
             } | undefined) ?? {};
 
-            const compactionMarkers = () => exp().compaction_markers ?? false;
             const userMemEnabled = () => exp().user_memories?.enabled ?? false;
             const userMemThreshold = () => exp().user_memories?.promotion_threshold ?? 3;
             const pinEnabled = () => exp().pin_key_files?.enabled ?? false;
@@ -867,9 +866,7 @@ function ConfigForm(props: {
 
             const updateExp = (path: string, value: unknown) => {
               const current = exp();
-              if (path === "compaction_markers") {
-                handleFieldChange("experimental", { ...current, compaction_markers: value });
-              } else if (path.startsWith("user_memories.")) {
+              if (path.startsWith("user_memories.")) {
                 const um = current.user_memories ?? { enabled: false, promotion_threshold: 3 };
                 const field = path.split(".")[1];
                 handleFieldChange("experimental", { ...current, user_memories: { ...um, [field]: value } });
@@ -887,21 +884,8 @@ function ConfigForm(props: {
                   <span class="config-card-title">Experimental</span>
                 </div>
                 <div class="config-card-two-col">
-                  {/* Left column: Compaction Markers + User Memories */}
+                  {/* Left column: User Memories */}
                   <div class="config-card-content">
-                    <div class="config-field">
-                      <div class="config-field-header">
-                        <label class="config-field-label">Compaction Markers</label>
-                        <span class="config-field-key">experimental.compaction_markers</span>
-                      </div>
-                      <span class="config-field-desc">Inject boundary into OpenCode's DB so transform only processes the live tail</span>
-                      <label class="toggle-switch">
-                        <input type="checkbox" checked={compactionMarkers()} onChange={(e) => updateExp("compaction_markers", e.currentTarget.checked)} />
-                        <span class="toggle-slider" />
-                        <span class="toggle-label">{compactionMarkers() ? "Enabled" : "Disabled"}</span>
-                      </label>
-                    </div>
-
                     <div class="config-field">
                       <div class="config-field-header">
                         <label class="config-field-label">User Memories</label>
@@ -1084,7 +1068,7 @@ export default function ConfigEditor(props: { models: string[] }) {
               <div class="empty-state">
                 <span class="empty-state-icon">⚙️</span>
                 <span>No user config found at {userConfig()?.path}</span>
-                <span style={{ "font-size": "11px" }}>Run <code>bunx @cortexkit/opencode-magic-context setup</code> to create one</span>
+                <span style={{ "font-size": "11px" }}>Run <code>bunx --bun @cortexkit/opencode-magic-context setup</code> to create one</span>
               </div>
             }>
               <ConfigForm
