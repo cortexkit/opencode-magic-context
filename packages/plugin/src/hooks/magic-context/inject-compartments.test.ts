@@ -73,9 +73,12 @@ describe("prepareCompartmentInjection — empty compartments fallback", () => {
 
     it("injects facts-only block when compartments empty but facts exist", () => {
         db = makeDb();
-        replaceAllCompartmentState(db, SESSION_ID, [], [
-            { category: "DECISIONS", content: "Use SQLite" },
-        ]);
+        replaceAllCompartmentState(
+            db,
+            SESSION_ID,
+            [],
+            [{ category: "DECISIONS", content: "Use SQLite" }],
+        );
 
         const messages: MessageLike[] = [userMessage("m1", "go")];
         const result = prepareCompartmentInjection(db, SESSION_ID, messages, true, PROJECT_PATH);
@@ -95,9 +98,12 @@ describe("prepareCompartmentInjection — empty compartments fallback", () => {
             category: "CONSTRAINTS",
             content: "Never commit without tests",
         });
-        replaceAllCompartmentState(db, SESSION_ID, [], [
-            { category: "DECISIONS", content: "Monorepo layout" },
-        ]);
+        replaceAllCompartmentState(
+            db,
+            SESSION_ID,
+            [],
+            [{ category: "DECISIONS", content: "Monorepo layout" }],
+        );
 
         const messages: MessageLike[] = [userMessage("m1", "hello")];
         const result = prepareCompartmentInjection(db, SESSION_ID, messages, true, PROJECT_PATH);
@@ -224,10 +230,7 @@ describe("prepareCompartmentInjection — transition from empty to compartment",
         expect(busted?.compartmentCount).toBe(0);
 
         // Defer pass: should return cached without changing messages
-        const deferMessages: MessageLike[] = [
-            userMessage("m1", "hi"),
-            userMessage("m2", "new"),
-        ];
+        const deferMessages: MessageLike[] = [userMessage("m1", "hi"), userMessage("m2", "new")];
         const cached = prepareCompartmentInjection(
             db,
             SESSION_ID,
