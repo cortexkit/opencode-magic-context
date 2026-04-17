@@ -1,9 +1,106 @@
 import { mkdirSync } from "node:fs";
+import { open, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DEFAULT_LOCAL_EMBEDDING_MODEL } from "../../../config/schema/magic-context";
 import { getOpenCodeStorageDir } from "../../../shared/data-path";
 import { log } from "../../../shared/logger";
 import type { EmbeddingProvider } from "./embedding-provider";
+
+/**
+ * Cross-process mutex for embedding-model load. When two OpenCode processes
+ * spawn simultaneously (typical Desktop sidecar + TUI + dashboard setup), they
+ * can both call onnxruntime-node's `InferenceSession::LoadModel` on the same
+ * cached `.onnx` file at the same wall-clock time. Older onnxruntime-node
+ * builds (<=1.21.0 / native lib 1.14.0) could double-free an internal
+ * `IoBinding` during cleanup when this happened, producing SIGBUS/SIGTRAP
+ * crashes inside the worker thread and silently killing the TUI.
+ *
+ * See https://github.com/cortexkit/opencode-magic-context/issues/21.
+ *
+ * Transformers v4 / onnxruntime-node 1.24.x ships a much newer native library
+ * and is expected to handle this, but we add a belt-and-suspenders file lock
+ * so two processes never call `createPipeline()` at the exact same instant.
+ *
+ * Contract:
+ *   - Uses `open(path, "wx")` — atomic-create with exclusive flag on POSIX,
+ *     and the equivalent on Windows (ERROR_FILE_EXISTS).
+ *   - Writes our PID + timestamp to the lock file for diagnostics.
+ *   - If the lock is held by another process, polls every 150ms.
+ *   - Treats a lock file older than `STALE_LOCK_MS` as stale (crashed holder)
+ *     and takes it over.
+ *   - If we cannot acquire the lock within `MAX_LOCK_WAIT_MS`, we log a
+ *     warning and proceed without the lock rather than blocking embedding
+ *     forever. Model load failures in this case are caught by the retry loop.
+ */
+const LOCK_POLL_MS = 150;
+const STALE_LOCK_MS = 3 * 60_000; // 3 minutes — model loads are typically <30s
+const MAX_LOCK_WAIT_MS = 5 * 60_000; // 5 minutes
+
+async function acquireModelLoadLock(lockPath: string): Promise<() => Promise<void>> {
+    const waitStart = Date.now();
+    while (true) {
+        try {
+            const handle = await open(lockPath, "wx");
+            // Best-effort write of PID + timestamp for diagnostics.
+            try {
+                await handle.writeFile(`pid=${process.pid} started=${Date.now()}\n`);
+            } catch {
+                /* non-fatal */
+            }
+            await handle.close();
+            return async () => {
+                try {
+                    await unlink(lockPath);
+                } catch {
+                    /* already gone / race — ignore */
+                }
+            };
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            // On Windows, Node can surface EEXIST as EPERM for this case.
+            if (code !== "EEXIST" && code !== "EPERM") {
+                throw error;
+            }
+            // Lock exists — check if it's stale.
+            try {
+                const info = await stat(lockPath);
+                if (Date.now() - info.mtimeMs > STALE_LOCK_MS) {
+                    log(
+                        `[magic-context] embedding-load lock stale (>${STALE_LOCK_MS}ms), taking over`,
+                    );
+                    try {
+                        await unlink(lockPath);
+                    } catch {
+                        /* another process may have cleaned it up — retry acquire */
+                    }
+                    continue;
+                }
+            } catch {
+                // Lock disappeared between create-fail and stat — retry acquire.
+                continue;
+            }
+            if (Date.now() - waitStart > MAX_LOCK_WAIT_MS) {
+                log("[magic-context] embedding-load lock wait exceeded, proceeding without lock");
+                // Return a no-op release — we never acquired the lock.
+                return async () => {};
+            }
+            await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+        }
+    }
+}
+
+// Touch the lock file periodically so a long-running model load doesn't get
+// misdetected as stale by another waiting process.
+function startLockHeartbeat(lockPath: string): () => void {
+    const HEARTBEAT_MS = Math.floor(STALE_LOCK_MS / 3);
+    const timer = setInterval(() => {
+        // writeFile with fresh content updates mtime; any error is non-fatal.
+        writeFile(lockPath, `pid=${process.pid} alive=${Date.now()}\n`).catch(() => {});
+    }, HEARTBEAT_MS);
+    // Don't keep the event loop alive solely for the heartbeat.
+    timer.unref?.();
+    return () => clearInterval(timer);
+}
 
 type EmbeddingPipelineResult = {
     data: ArrayLike<number> | ArrayLike<number>[];
@@ -21,7 +118,7 @@ type EmbeddingPipeline = {
 type CreateEmbeddingPipeline = (
     task: "feature-extraction",
     model: string,
-    options: { quantized: boolean; dtype: string },
+    options: { dtype: string },
 ) => Promise<EmbeddingPipeline>;
 
 /**
@@ -187,43 +284,58 @@ export class LocalEmbeddingProvider implements EmbeddingProvider {
                 }
                 const createPipeline = transformersModule.pipeline as CreateEmbeddingPipeline;
 
-                // Retry loop absorbs transient failures seen when multiple plugin
-                // processes initialize the ONNX session around the same time:
-                //   - "Protobuf parsing failed" (onnxruntime-node race on mmap/page cache)
-                //   - "Unable to get model file path or buffer" (download still in progress)
-                //   - EBUSY / file lock contention
-                // Recovery happens within a few hundred ms. The file on disk is fine;
-                // we verified this on live logs with matching SHA256 vs HuggingFace.
-                const MAX_ATTEMPTS = 3;
-                let lastError: unknown;
-                for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-                    try {
-                        this.pipeline = await withQuietConsole(() =>
-                            createPipeline("feature-extraction", this.model, {
-                                quantized: true,
-                                dtype: "fp32",
-                            }),
-                        );
-                        lastError = undefined;
-                        break;
-                    } catch (error) {
-                        lastError = error;
-                        if (!isTransientLoadError(error) || attempt === MAX_ATTEMPTS) {
+                // Cross-process lock — serializes InferenceSession::LoadModel
+                // across concurrently-starting OpenCode processes. See the
+                // doc block on `acquireModelLoadLock` and issue #21.
+                const lockPath = join(modelCacheDir, ".load.lock");
+                const releaseLock = await acquireModelLoadLock(lockPath);
+                const stopHeartbeat = startLockHeartbeat(lockPath);
+                try {
+                    // Retry loop absorbs transient failures seen when multiple plugin
+                    // processes initialize the ONNX session around the same time:
+                    //   - "Protobuf parsing failed" (onnxruntime-node race on mmap/page cache)
+                    //   - "Unable to get model file path or buffer" (download still in progress)
+                    //   - EBUSY / file lock contention
+                    // Recovery happens within a few hundred ms. The file on disk is fine;
+                    // we verified this on live logs with matching SHA256 vs HuggingFace.
+                    const MAX_ATTEMPTS = 3;
+                    let lastError: unknown;
+                    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+                        try {
+                            // NOTE: transformers v4 deprecated the `quantized: boolean`
+                            // flag in favor of `dtype` as the canonical precision option.
+                            // Passing `dtype: "fp32"` selects the full-precision ONNX
+                            // model; the model file on disk is unchanged (~90MB for
+                            // all-MiniLM-L6-v2).
+                            this.pipeline = await withQuietConsole(() =>
+                                createPipeline("feature-extraction", this.model, {
+                                    dtype: "fp32",
+                                }),
+                            );
+                            lastError = undefined;
                             break;
+                        } catch (error) {
+                            lastError = error;
+                            if (!isTransientLoadError(error) || attempt === MAX_ATTEMPTS) {
+                                break;
+                            }
+                            // Jittered backoff: 300ms + random 0-200ms, grows by attempt.
+                            const delayMs = 300 * attempt + Math.floor(Math.random() * 200);
+                            log(
+                                `[magic-context] embedding model load attempt ${attempt}/${MAX_ATTEMPTS} failed transiently, retrying in ${delayMs}ms`,
+                            );
+                            await new Promise((resolve) => setTimeout(resolve, delayMs));
                         }
-                        // Jittered backoff: 300ms + random 0-200ms, grows by attempt.
-                        const delayMs = 300 * attempt + Math.floor(Math.random() * 200);
-                        log(
-                            `[magic-context] embedding model load attempt ${attempt}/${MAX_ATTEMPTS} failed transiently, retrying in ${delayMs}ms`,
-                        );
-                        await new Promise((resolve) => setTimeout(resolve, delayMs));
                     }
-                }
 
-                if (this.pipeline) {
-                    log(`[magic-context] embedding model loaded: ${this.model}`);
-                } else {
-                    throw lastError ?? new Error("unknown embedding load failure");
+                    if (this.pipeline) {
+                        log(`[magic-context] embedding model loaded: ${this.model}`);
+                    } else {
+                        throw lastError ?? new Error("unknown embedding load failure");
+                    }
+                } finally {
+                    stopHeartbeat();
+                    await releaseLock();
                 }
             } catch (error) {
                 log("[magic-context] embedding model failed to load:", error);

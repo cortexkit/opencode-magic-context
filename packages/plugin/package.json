@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@huggingface/transformers": "~3.7.6",
+    "@huggingface/transformers": "^4.1.0",
     "@opencode-ai/plugin": "^1.2.26",
     "@opencode-ai/sdk": "^1.2.26",
     "ai-tokenizer": "^1.0.6",
