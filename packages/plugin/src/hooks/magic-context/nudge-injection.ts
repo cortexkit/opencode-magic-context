@@ -23,6 +23,25 @@ function hasToolProtocolParts(message: MessageLike): boolean {
     return message.parts.some(isToolProtocolPart);
 }
 
+/**
+ * Assistant messages with thinking/reasoning/redacted_thinking parts carry
+ * signed signatures from the Anthropic API. Any mutation to their content
+ * (text, tool calls, thinking) invalidates those signatures and causes
+ * Anthropic to reject the request with:
+ *   "thinking or redacted_thinking blocks in the latest assistant message
+ *    cannot be modified"
+ *
+ * Treat such messages as immutable from the nudge-injection perspective:
+ * never anchor a nudge to them, never rewrite their existing text.
+ */
+function hasThinkingBearingParts(message: MessageLike): boolean {
+    return message.parts.some((part) => {
+        if (part === null || typeof part !== "object") return false;
+        const p = part as Record<string, unknown>;
+        return p.type === "thinking" || p.type === "reasoning" || p.type === "redacted_thinking";
+    });
+}
+
 function isMessageDropped(message: MessageLike): boolean {
     const textParts = message.parts.filter(isTextPart);
     if (textParts.length === 0) return true;
@@ -47,7 +66,8 @@ function isAppendableAssistantMessage(message: MessageLike): boolean {
     return (
         message.info.role === "assistant" &&
         !hasToolProtocolParts(message) &&
-        !isMessageDropped(message)
+        !isMessageDropped(message) &&
+        !hasThinkingBearingParts(message)
     );
 }
 
@@ -74,6 +94,18 @@ export function reinjectNudgeAtAnchor(
             return false;
         }
         if (hasToolProtocolParts(message)) {
+            nudgePlacements.clear(sessionId);
+            return false;
+        }
+        if (hasThinkingBearingParts(message)) {
+            // Anchor message was signed by Anthropic (has thinking/reasoning/
+            // redacted_thinking). Mutating its content would invalidate the
+            // signature on the next request. Drop the anchor so we stop
+            // targeting it; a future nudge will re-anchor to a safe message.
+            sessionLog(
+                sessionId,
+                `nudge anchor abandoned: message ${message.info.id} now contains thinking/reasoning parts (signed, immutable)`,
+            );
             nudgePlacements.clear(sessionId);
             return false;
         }
@@ -113,6 +145,9 @@ export function appendNudgeToAssistant(
         if (message.info.role !== "assistant") continue;
         if (hasToolProtocolParts(message)) continue;
         if (isMessageDropped(message)) continue;
+        // Skip signed assistant messages (thinking/reasoning parts present):
+        // mutating their content invalidates the Anthropic signature.
+        if (hasThinkingBearingParts(message)) continue;
 
         for (let j = message.parts.length - 1; j >= 0; j--) {
             const part = message.parts[j];
