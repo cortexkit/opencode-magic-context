@@ -403,4 +403,134 @@ describe("apply operations for tool drops", () => {
         expect(getTagById(db, "ses-1", messageTagId!)?.status).toBe("compacted");
         expect(messages[1]?.parts).toEqual([{ type: "text", text: "§2§ reduce me later" }]);
     });
+
+    describe("role-aware message drops (user message protection)", () => {
+        it("truncates user message content instead of full drop when tag is queued", () => {
+            useTempDataHome("context-user-msg-truncate-pending-");
+            const db = openDatabase();
+            const tagger = createTagger();
+            const longPaste = `Here is the log I was debugging:\n${"ERROR: something failed at line 42. ".repeat(50)}`;
+            const messages: MessageLike[] = [
+                {
+                    info: { id: "m-user", role: "user", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: longPaste }],
+                },
+                {
+                    info: { id: "m-assistant", role: "assistant", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: "ok" }],
+                },
+            ];
+
+            const { targets } = tagMessages("ses-1", messages, tagger, db);
+            const userMsgTagId = tagger.getTag("ses-1", "m-user:p0");
+            expect(userMsgTagId).toBeDefined();
+
+            queuePendingOp(db, "ses-1", userMsgTagId!, "drop");
+            const didMutate = applyPendingOperations("ses-1", db, targets);
+
+            expect(didMutate).toBe(true);
+            expect(getTagById(db, "ses-1", userMsgTagId!)?.status).toBe("dropped");
+
+            const text = (messages[0]?.parts[0] as { text: string }).text;
+            // Must start with the truncated marker, not the dropped marker.
+            expect(text.startsWith(`[truncated §${userMsgTagId}§]`)).toBe(true);
+            expect(text.includes("[dropped")).toBe(false);
+            // Must preserve the START of the user's original text (intent).
+            expect(text.includes("Here is the log I was debugging")).toBe(true);
+            // Must NOT contain the full original repeated content (50 copies) — it was truncated.
+            const matchCount = (text.match(/ERROR: something failed/g) ?? []).length;
+            expect(matchCount).toBeLessThan(20);
+            // Truncation window is ~250 chars; length must be bounded.
+            expect(text.length).toBeLessThan(400);
+        });
+
+        it("preserves user message shell when flushed dropped status is re-applied", () => {
+            useTempDataHome("context-user-msg-truncate-flush-");
+            const db = openDatabase();
+            const tagger = createTagger();
+            const messages: MessageLike[] = [
+                {
+                    info: { id: "m-user", role: "user", sessionID: "ses-1" },
+                    parts: [
+                        {
+                            type: "text",
+                            text: "Please fix the bug I mentioned in the last ticket. See attached log for details.",
+                        },
+                    ],
+                },
+                {
+                    info: { id: "m-assistant", role: "assistant", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: "ok" }],
+                },
+            ];
+
+            const { targets } = tagMessages("ses-1", messages, tagger, db);
+            const userMsgTagId = tagger.getTag("ses-1", "m-user:p0");
+            expect(userMsgTagId).toBeDefined();
+
+            updateTagStatus(db, "ses-1", userMsgTagId!, "dropped");
+            const didMutate = applyFlushedStatuses("ses-1", db, targets);
+
+            expect(didMutate).toBe(true);
+            const text = (messages[0]?.parts[0] as { text: string }).text;
+            expect(text.startsWith(`[truncated §${userMsgTagId}§]`)).toBe(true);
+            // Short text should be preserved as-is (under preview window).
+            expect(text.includes("Please fix the bug I mentioned")).toBe(true);
+        });
+
+        it("keeps using [dropped §N§] full drop for assistant messages (no regression)", () => {
+            useTempDataHome("context-assistant-msg-drop-unchanged-");
+            const db = openDatabase();
+            const tagger = createTagger();
+            const messages: MessageLike[] = [
+                {
+                    info: { id: "m-user", role: "user", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: "hi" }],
+                },
+                {
+                    info: { id: "m-assistant", role: "assistant", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: "response body" }],
+                },
+            ];
+
+            const { targets } = tagMessages("ses-1", messages, tagger, db);
+            const asstMsgTagId = tagger.getTag("ses-1", "m-assistant:p0");
+            expect(asstMsgTagId).toBeDefined();
+
+            queuePendingOp(db, "ses-1", asstMsgTagId!, "drop");
+            const didMutate = applyPendingOperations("ses-1", db, targets);
+
+            expect(didMutate).toBe(true);
+            expect(messages[1]?.parts).toEqual([
+                { type: "text", text: `[dropped §${asstMsgTagId}§]` },
+            ]);
+        });
+
+        it("short user text survives as truncated preview without ellipsis", () => {
+            useTempDataHome("context-user-msg-short-");
+            const db = openDatabase();
+            const tagger = createTagger();
+            const shortText = "rebuild the project";
+            const messages: MessageLike[] = [
+                {
+                    info: { id: "m-user", role: "user", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: shortText }],
+                },
+                {
+                    info: { id: "m-assistant", role: "assistant", sessionID: "ses-1" },
+                    parts: [{ type: "text", text: "ok" }],
+                },
+            ];
+
+            const { targets } = tagMessages("ses-1", messages, tagger, db);
+            const userMsgTagId = tagger.getTag("ses-1", "m-user:p0");
+            queuePendingOp(db, "ses-1", userMsgTagId!, "drop");
+            applyPendingOperations("ses-1", db, targets);
+
+            const text = (messages[0]?.parts[0] as { text: string }).text;
+            expect(text).toBe(`[truncated §${userMsgTagId}§]\n${shortText}`);
+            // No ellipsis for content that already fits under the preview window.
+            expect(text.includes("\u2026")).toBe(false);
+        });
+    });
 });

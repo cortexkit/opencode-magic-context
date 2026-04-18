@@ -700,8 +700,13 @@ describe("createTransform", () => {
         //#when
         await transform({}, { messages: secondPass });
 
-        //#then
-        expect(secondPass).toHaveLength(0);
+        //#then — user message shell is preserved (turn boundary) with truncated
+        // preview; tool-only assistant is fully dropped and its shell stripped.
+        expect(secondPass).toHaveLength(1);
+        expect(secondPass[0]?.info.role).toBe("user");
+        const userShellText = (secondPass[0]?.parts[0] as { text: string }).text;
+        expect(userShellText.startsWith("[truncated \u00a71\u00a7]")).toBe(true);
+        expect(userShellText.includes("initial user text")).toBe(true);
         expect(getTagById(db, "ses-1", 1)?.status).toBe("dropped");
         expect(getTagById(db, "ses-1", 2)?.status).toBe("dropped");
         expect(clearPendingOps(db, "ses-1")).toBeUndefined();
@@ -1090,7 +1095,13 @@ describe("createTransform", () => {
         ];
         await transform({}, { messages: secondPass });
 
-        expect(text(secondPass[0], 0)).toBe("[dropped \u00a71\u00a7]");
+        // User messages get a truncated preview (not a full drop) so the turn
+        // boundary survives for AI SDK's Anthropic adapter. The first part is
+        // a text-only synthetic content — it remains marked as truncated while
+        // preserving its original text (which is under the preview window).
+        expect(text(secondPass[0], 0)).toBe(
+            "[truncated \u00a71\u00a7]\n[synthetic injected content]",
+        );
         expect(text(secondPass[0], 1)).toStartWith("\u00a72\u00a7 ");
         expect(text(secondPass[0], 1)).toContain("actual user message");
     });

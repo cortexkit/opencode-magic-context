@@ -112,6 +112,14 @@ function writeConfigs(
                         name: "Mock Sonnet",
                         cost: { input: 0, output: 0 },
                         limit: { context: opts.modelContextLimit ?? 200000, output: 8192 },
+                        // Advertise image + pdf input support so OpenCode does
+                        // not substitute inline file parts with "this model
+                        // does not support X input" text messages. Matches the
+                        // real Sonnet capabilities this mock is standing in for.
+                        modalities: {
+                            input: ["text", "image", "pdf"],
+                            output: ["text"],
+                        },
                         options: {},
                     },
                 },

@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, mock } from "bun:test";
 import {
     clearOldReasoning,
     stripClearedReasoning,
+    stripDroppedPlaceholderMessages,
     stripInlineThinking,
     stripProcessedImages,
+    stripReasoningFromMergedAssistants,
     truncateErroredTools,
 } from "./strip-content";
 import type { MessageLike, ThinkingLikePart } from "./tag-messages";
@@ -439,6 +441,287 @@ describe("strip-content", () => {
                 it("#then it returns zero", () => {
                     expect(stripProcessedImages([], 5, new Map())).toBe(0);
                 });
+            });
+        });
+    });
+
+    describe("stripDroppedPlaceholderMessages", () => {
+        describe("#given a user message whose only text is a dropped placeholder", () => {
+            it("#then it keeps the user message shell (turn boundary preserved)", () => {
+                // Removing user messages between assistants collapses the turn
+                // structure and forces AI SDK's Anthropic adapter to merge
+                // consecutive assistants into a block whose signed thinking
+                // cannot survive the merge — "blocks cannot be modified".
+                const userMsg = message("m-user", "user", [
+                    { type: "text", text: "[dropped §42§]" },
+                ]);
+                const assistantBefore = message("m-before", "assistant", [
+                    { type: "text", text: "reply" },
+                ]);
+                const assistantAfter = message("m-after", "assistant", [
+                    { type: "text", text: "next reply" },
+                ]);
+                const messages = [assistantBefore, userMsg, assistantAfter];
+
+                const stripped = stripDroppedPlaceholderMessages(messages);
+
+                expect(stripped).toBe(0);
+                expect(messages).toHaveLength(3);
+                expect(messages[1]).toBe(userMsg);
+            });
+        });
+
+        describe("#given an assistant message whose only text is a dropped placeholder", () => {
+            it("#then it strips the assistant message shell", () => {
+                const userMsg = message("m-user", "user", [{ type: "text", text: "hi" }]);
+                const assistantDropped = message("m-asst-drop", "assistant", [
+                    { type: "text", text: "[dropped §5§]" },
+                ]);
+                const assistantKept = message("m-asst-keep", "assistant", [
+                    { type: "text", text: "real reply" },
+                ]);
+                const messages = [userMsg, assistantDropped, assistantKept];
+
+                const stripped = stripDroppedPlaceholderMessages(messages);
+
+                expect(stripped).toBe(1);
+                expect(messages).toHaveLength(2);
+                expect(messages.find((m) => m.info.id === "m-asst-drop")).toBeUndefined();
+            });
+        });
+
+        describe("#given a user message with dropped text AND a file/image part", () => {
+            it("#then it keeps the message (file content must survive)", () => {
+                // Even if the role check were absent, the file-part fix (removal
+                // of "file" from METADATA_PART_TYPES) must independently prevent
+                // stripping, because an image part carries real content that
+                // reaches the model. This guards against silently destroying a
+                // pasted screenshot when the accompanying text gets dropped.
+                const userWithImage = message("m-user-image", "user", [
+                    { type: "text", text: "[dropped §9§]" },
+                    {
+                        type: "file",
+                        mime: "image/png",
+                        url: "data:image/png;base64,iVBORw0KGgo=",
+                        filename: "screenshot.png",
+                    },
+                ]);
+                const messages = [userWithImage];
+
+                const stripped = stripDroppedPlaceholderMessages(messages);
+
+                expect(stripped).toBe(0);
+                expect(messages).toHaveLength(1);
+            });
+        });
+
+        describe("#given an assistant message with dropped text AND a file part", () => {
+            it("#then it keeps the message (file is no longer treated as metadata)", () => {
+                // Assistants with file attachments are rare but possible (e.g.,
+                // agent-generated images). The file-part fix protects them too.
+                const asstWithFile = message("m-asst-file", "assistant", [
+                    { type: "text", text: "[dropped §11§]" },
+                    {
+                        type: "file",
+                        mime: "image/png",
+                        url: "data:image/png;base64,iVBORw0KGgo=",
+                        filename: "output.png",
+                    },
+                ]);
+                const messages = [asstWithFile];
+
+                const stripped = stripDroppedPlaceholderMessages(messages);
+
+                expect(stripped).toBe(0);
+                expect(messages).toHaveLength(1);
+            });
+        });
+
+        describe("#given a user message with only dropped placeholder and step metadata", () => {
+            it("#then it still keeps the user message (role protection)", () => {
+                // Even with only metadata + dropped text (no image), a user
+                // message must survive to preserve turn boundaries.
+                const userMetadataOnly = message("m-user-meta", "user", [
+                    { type: "step-start", snapshot: "snap-1" },
+                    { type: "text", text: "[dropped §3§]" },
+                    { type: "step-finish", reason: "done" },
+                ]);
+                const messages = [userMetadataOnly];
+
+                const stripped = stripDroppedPlaceholderMessages(messages);
+
+                expect(stripped).toBe(0);
+                expect(messages).toHaveLength(1);
+            });
+        });
+
+        describe("#given an assistant message with [truncated §N§] text", () => {
+            it("#then it does NOT strip (truncated marker is distinct from dropped)", () => {
+                // The truncated format is never emitted for assistants today,
+                // but guarding against misuse of DROPPED_PLACEHOLDER_PATTERN
+                // keeps the behavior safe against pattern drift.
+                const asstTruncated = message("m-asst-trunc", "assistant", [
+                    { type: "text", text: "[truncated §7§]\npreview content" },
+                ]);
+                const messages = [asstTruncated];
+
+                const stripped = stripDroppedPlaceholderMessages(messages);
+
+                expect(stripped).toBe(0);
+                expect(messages).toHaveLength(1);
+            });
+        });
+    });
+
+    describe("stripReasoningFromMergedAssistants (anthropic groupIntoBlocks workaround)", () => {
+        describe("#given a single assistant with reasoning", () => {
+            it("#then leaves it untouched (no merge risk)", () => {
+                const user = message("u", "user", [{ type: "text", text: "hi" }]);
+                const asst = message("a", "assistant", [
+                    { type: "reasoning", text: "thinking..." },
+                    { type: "text", text: "hello" },
+                ]);
+                const messages = [user, asst];
+
+                const stripped = stripReasoningFromMergedAssistants(messages);
+
+                expect(stripped).toBe(0);
+                expect(asst.parts).toHaveLength(2);
+            });
+        });
+
+        describe("#given two consecutive assistants each with reasoning", () => {
+            it("#then keeps reasoning on the first and strips from the second", () => {
+                const user = message("u", "user", [{ type: "text", text: "go" }]);
+                const a1 = message("a1", "assistant", [
+                    { type: "reasoning", text: "r1" },
+                    { type: "text", text: "t1" },
+                ]);
+                const a2 = message("a2", "assistant", [
+                    { type: "reasoning", text: "r2" },
+                    { type: "text", text: "t2" },
+                ]);
+                const messages = [user, a1, a2];
+
+                const stripped = stripReasoningFromMergedAssistants(messages);
+
+                expect(stripped).toBe(1);
+                expect(a1.parts).toHaveLength(2);
+                expect((a1.parts[0] as { type: string }).type).toBe("reasoning");
+                expect(a2.parts).toHaveLength(1);
+                expect((a2.parts[0] as { type: string }).type).toBe("text");
+            });
+        });
+
+        describe("#given a long consecutive assistant run with tool calls and reasoning", () => {
+            it("#then keeps only the first reasoning; intermediate reasoning is stripped", () => {
+                const user = message("u", "user", [{ type: "text", text: "build" }]);
+                const a1 = message("a1", "assistant", [
+                    { type: "reasoning", text: "r1" },
+                    { type: "text", text: "t1" },
+                    { type: "tool", state: { status: "completed" } },
+                ]);
+                const a2 = message("a2", "assistant", [
+                    { type: "reasoning", text: "r2" },
+                    { type: "text", text: "t2" },
+                ]);
+                const a3 = message("a3", "assistant", [
+                    { type: "reasoning", text: "r3" },
+                    { type: "text", text: "t3" },
+                    { type: "tool", state: { status: "completed" } },
+                ]);
+                const a4 = message("a4", "assistant", [
+                    { type: "reasoning", text: "r4" },
+                    { type: "text", text: "done" },
+                ]);
+                const messages = [user, a1, a2, a3, a4];
+
+                const stripped = stripReasoningFromMergedAssistants(messages);
+
+                expect(stripped).toBe(3);
+                // First assistant keeps its reasoning
+                expect(a1.parts).toHaveLength(3);
+                expect((a1.parts[0] as { type: string }).type).toBe("reasoning");
+                // Subsequent assistants lose reasoning but keep other parts
+                expect(a2.parts.map((p) => (p as { type: string }).type)).toEqual(["text"]);
+                expect(a3.parts.map((p) => (p as { type: string }).type)).toEqual(["text", "tool"]);
+                expect(a4.parts.map((p) => (p as { type: string }).type)).toEqual(["text"]);
+            });
+        });
+
+        describe("#given two separate assistant runs broken by a user or tool message", () => {
+            it("#then each run's first assistant keeps its reasoning", () => {
+                const u1 = message("u1", "user", [{ type: "text", text: "q1" }]);
+                const a1 = message("a1", "assistant", [
+                    { type: "reasoning", text: "r1" },
+                    { type: "text", text: "t1" },
+                ]);
+                const a2 = message("a2", "assistant", [
+                    { type: "reasoning", text: "r2" },
+                    { type: "text", text: "t2" },
+                ]);
+                const u2 = message("u2", "user", [{ type: "text", text: "q2" }]);
+                const a3 = message("a3", "assistant", [
+                    { type: "reasoning", text: "r3" },
+                    { type: "text", text: "t3" },
+                ]);
+                const a4 = message("a4", "assistant", [
+                    { type: "reasoning", text: "r4" },
+                    { type: "text", text: "t4" },
+                ]);
+                const messages = [u1, a1, a2, u2, a3, a4];
+
+                const stripped = stripReasoningFromMergedAssistants(messages);
+
+                // Stripped from a2 and a4 only
+                expect(stripped).toBe(2);
+                expect(a1.parts.map((p) => (p as { type: string }).type)).toEqual([
+                    "reasoning",
+                    "text",
+                ]);
+                expect(a2.parts.map((p) => (p as { type: string }).type)).toEqual(["text"]);
+                expect(a3.parts.map((p) => (p as { type: string }).type)).toEqual([
+                    "reasoning",
+                    "text",
+                ]);
+                expect(a4.parts.map((p) => (p as { type: string }).type)).toEqual(["text"]);
+            });
+        });
+
+        describe("#given a tool-role message between two assistants", () => {
+            it("#then the second assistant keeps its reasoning (not a consecutive run)", () => {
+                const u = message("u", "user", [{ type: "text", text: "q" }]);
+                const a1 = message("a1", "assistant", [
+                    { type: "reasoning", text: "r1" },
+                    { type: "text", text: "t1" },
+                ]);
+                const t = message("t", "tool", [{ type: "tool", state: { status: "completed" } }]);
+                const a2 = message("a2", "assistant", [
+                    { type: "reasoning", text: "r2" },
+                    { type: "text", text: "t2" },
+                ]);
+                const messages = [u, a1, t, a2];
+
+                const stripped = stripReasoningFromMergedAssistants(messages);
+
+                expect(stripped).toBe(0);
+                expect(a1.parts).toHaveLength(2);
+                expect(a2.parts).toHaveLength(2);
+            });
+        });
+
+        describe("#given an assistant with no reasoning at all", () => {
+            it("#then strips nothing (no-op)", () => {
+                const u = message("u", "user", [{ type: "text", text: "q" }]);
+                const a1 = message("a1", "assistant", [{ type: "text", text: "t1" }]);
+                const a2 = message("a2", "assistant", [{ type: "text", text: "t2" }]);
+                const messages = [u, a1, a2];
+
+                const stripped = stripReasoningFromMergedAssistants(messages);
+
+                expect(stripped).toBe(0);
+                expect(a1.parts).toHaveLength(1);
+                expect(a2.parts).toHaveLength(1);
             });
         });
     });

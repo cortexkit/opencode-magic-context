@@ -122,9 +122,13 @@ describe("createTransform nudge cache handling", () => {
         //#when
         await transform({}, { messages: secondPass });
 
-        //#then — user (tag 1) is stripped; assistant moves to index 0
-        expect(secondPass).toHaveLength(1);
-        expect(firstText(secondPass[0]!)).not.toContain("[old nudge]");
+        //#then — user (tag 1) shell is preserved via truncation (not stripped);
+        // assistant at index 1 must have the stale nudge cleared.
+        expect(secondPass).toHaveLength(2);
+        expect(secondPass[0]?.info.role).toBe("user");
+        const userShell = firstText(secondPass[0]!);
+        expect(userShell.startsWith("[truncated \u00a71\u00a7]")).toBe(true);
+        expect(firstText(secondPass[1]!)).not.toContain("[old nudge]");
         expect(getPersistedNudgePlacement(db, "ses-1")).toBeNull();
     });
 

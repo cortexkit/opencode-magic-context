@@ -235,7 +235,13 @@ export class MockProvider {
 
                         // Emit each content block from the scripted `content` array.
                         content.forEach((block: unknown, index: number) => {
-                            const blk = block as { type?: string; text?: string };
+                            const blk = block as {
+                                type?: string;
+                                text?: string;
+                                thinking?: string;
+                                signature?: string;
+                                data?: string;
+                            };
                             const blockType = blk.type ?? "text";
 
                             if (blockType === "text") {
@@ -253,8 +259,59 @@ export class MockProvider {
                                     type: "content_block_stop",
                                     index,
                                 });
+                            } else if (blockType === "thinking") {
+                                // Real Anthropic streams thinking as:
+                                // 1. content_block_start { content_block: { type: "thinking", thinking: "" } }
+                                // 2. content_block_delta { delta: { type: "thinking_delta", thinking: "..." } }
+                                // 3. content_block_delta { delta: { type: "signature_delta", signature: "..." } }
+                                // 4. content_block_stop
+                                // @ai-sdk/anthropic reconstructs the reasoning part from these deltas.
+                                send("content_block_start", {
+                                    type: "content_block_start",
+                                    index,
+                                    content_block: { type: "thinking", thinking: "" },
+                                });
+                                if (blk.thinking) {
+                                    send("content_block_delta", {
+                                        type: "content_block_delta",
+                                        index,
+                                        delta: {
+                                            type: "thinking_delta",
+                                            thinking: blk.thinking,
+                                        },
+                                    });
+                                }
+                                if (blk.signature) {
+                                    send("content_block_delta", {
+                                        type: "content_block_delta",
+                                        index,
+                                        delta: {
+                                            type: "signature_delta",
+                                            signature: blk.signature,
+                                        },
+                                    });
+                                }
+                                send("content_block_stop", {
+                                    type: "content_block_stop",
+                                    index,
+                                });
+                            } else if (blockType === "redacted_thinking") {
+                                // Redacted thinking carries opaque `data` in the start event;
+                                // no deltas are emitted — the full payload arrives up front.
+                                send("content_block_start", {
+                                    type: "content_block_start",
+                                    index,
+                                    content_block: {
+                                        type: "redacted_thinking",
+                                        data: blk.data ?? "",
+                                    },
+                                });
+                                send("content_block_stop", {
+                                    type: "content_block_stop",
+                                    index,
+                                });
                             } else {
-                                // Pass through non-text blocks as-is (tool_use, etc.)
+                                // Pass through other non-text blocks as-is (tool_use, etc.)
                                 send("content_block_start", {
                                     type: "content_block_start",
                                     index,

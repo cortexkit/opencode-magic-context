@@ -26,11 +26,13 @@ import { onNoteTrigger } from "./note-nudger";
 import type { NudgePlacementStore } from "./nudge-placement-store";
 import type { ContextNudge } from "./nudger";
 import { getProtectedTailStartOrdinal, getRawSessionMessageCount } from "./read-session-chunk";
+import { estimateTokens } from "./read-session-formatting";
 import { sendIgnoredMessage } from "./send-session-notification";
 import {
     replayClearedReasoning,
     replayStrippedInlineThinking,
     stripClearedReasoning,
+    stripReasoningFromMergedAssistants,
 } from "./strip-content";
 import { runCompartmentPhase } from "./transform-compartment-phase";
 import { loadContextUsage, resolveSchedulerDecision } from "./transform-context-state";
@@ -479,6 +481,25 @@ export function createTransform(deps: TransformDeps) {
             `strippedParts=${strippedClearedReasoning}`,
         );
 
+        // Strip reasoning from non-first assistants in consecutive runs to
+        // avoid @ai-sdk/anthropic's groupIntoBlocks producing interleaved
+        // thinking blocks that Opus 4.7 rejects. See strip-content.ts for
+        // full explanation.
+        const tMergeStrip = performance.now();
+        const strippedMergedReasoning = stripReasoningFromMergedAssistants(messages);
+        if (strippedMergedReasoning > 0) {
+            sessionLog(
+                sessionId,
+                `stripped ${strippedMergedReasoning} reasoning parts from merged assistants (anthropic groupIntoBlocks workaround)`,
+            );
+        }
+        logTransformTiming(
+            sessionId,
+            "stripReasoningFromMergedAssistants",
+            tMergeStrip,
+            `strippedParts=${strippedMergedReasoning}`,
+        );
+
         let watermark = 0;
         for (const tag of tags) {
             if (tag.status === "dropped" && tag.tagNumber > watermark) {
@@ -562,6 +583,35 @@ export function createTransform(deps: TransformDeps) {
             projectPath: deps.projectPath,
         });
         logTransformTiming(sessionId, "postTransformPhase", tPostProcess);
+
+        // Estimate the total token size of the transformed messages array so
+        // the sidebar / dashboard can attribute inputTokens between System
+        // (from system.transform), Tools (inferred as the remainder), and
+        // Conversation (actual messages minus injected compartments/facts/memories).
+        // This value intentionally includes the injected <session-history>
+        // block — the display layer subtracts compartmentTokens/factTokens/
+        // memoryTokens to isolate real user/assistant conversation.
+        let conversationTokens = 0;
+        for (const message of messages) {
+            for (const part of message.parts) {
+                if (!part || typeof part !== "object") continue;
+                const p = part as { type?: string; text?: string; ignored?: boolean };
+                if (p.ignored) continue;
+                if (p.type === "text" && typeof p.text === "string") {
+                    conversationTokens += estimateTokens(p.text);
+                }
+            }
+        }
+        try {
+            updateSessionMeta(db, sessionId, { conversationTokens });
+        } catch (error) {
+            // Pure display/telemetry optimization — never fail transform on a
+            // BUSY/transient error here. Next pass will refresh the value.
+            const code = (error as { code?: string } | null)?.code;
+            if (code !== "SQLITE_BUSY") {
+                sessionLog(sessionId, "conversation_tokens UPDATE failed:", error);
+            }
+        }
 
         const elapsed = (performance.now() - startTime).toFixed(1);
         sessionLog(

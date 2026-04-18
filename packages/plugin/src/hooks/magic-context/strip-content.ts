@@ -85,9 +85,15 @@ export function stripSystemInjectedMessages(
 }
 
 // OpenCode messages can have metadata parts alongside content parts.
-// Only text/reasoning/tool parts carry content to the model — metadata parts
-// are invisible to the LLM. We skip these when deciding if a message is
-// nothing but dropped placeholders.
+// Only text/reasoning/tool/file parts carry content to the model — metadata
+// parts are invisible to the LLM. We skip these when deciding if a message
+// is nothing but dropped placeholders.
+//
+// NOTE: `file` is NOT in this set because file parts carry real content
+// (pasted images, attached documents, etc.) that reaches the model via a
+// provider-specific content block. Treating a file part as metadata would
+// risk stripping an image-bearing message if its text part became a dropped
+// placeholder, silently destroying the user's visual context.
 const METADATA_PART_TYPES = new Set([
     "step-start",
     "step-finish",
@@ -97,19 +103,35 @@ const METADATA_PART_TYPES = new Set([
     "retry",
     "subtask",
     "compaction",
-    "file",
 ]);
 
 /**
  * Remove messages that consist entirely of [dropped §N§] placeholders.
  * These are leftover shells after ctx_reduce drops their content — keeping them
  * wastes tokens without providing any value since there is no recall mechanism.
+ *
+ * User-role messages are NEVER stripped, even if their only text is a dropped
+ * placeholder. Removing a user message between two assistants collapses the
+ * turn boundary, which causes the AI SDK's Anthropic adapter to merge
+ * consecutive assistants into a single "latest assistant" block containing
+ * signed thinking. The merged block's signature no longer matches the
+ * original, triggering:
+ *   "thinking or redacted_thinking blocks in the latest assistant message
+ *    cannot be modified"
+ *
+ * For user messages whose content the agent wanted to drop, apply-operations
+ * emits a `[truncated §N§]` preview instead of a full `[dropped §N§]`, which
+ * keeps the shell visible and preserves the turn boundary.
  */
 export function stripDroppedPlaceholderMessages(messages: MessageLike[]): number {
     let stripped = 0;
     for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i];
         if (msg.parts.length === 0) continue;
+
+        // Never strip user-role messages — they anchor turn boundaries that
+        // AI SDK depends on to avoid merging consecutive assistants.
+        if (msg.info.role === "user") continue;
 
         let hasContentPart = false;
         let hasNonDroppedContent = false;
@@ -371,6 +393,56 @@ export function truncateErroredTools(
         }
     }
     return truncated;
+}
+
+/**
+ * Work around @ai-sdk/anthropic's groupIntoBlocks behavior. When multiple
+ * consecutive OpenCode assistant messages (each carrying its own signed
+ * reasoning part) are sent to the Anthropic provider, the SDK merges them
+ * into a single Anthropic assistant block with thinking blocks INTERLEAVED
+ * between text blocks — e.g. [thinking, text, thinking, text, thinking, text].
+ *
+ * Claude Opus 4.7's server-side validation rejects this layout with:
+ *   "thinking or redacted_thinking blocks in the latest assistant message
+ *    cannot be modified. These blocks must remain as they were in the
+ *    original response."
+ *
+ * The only safe layout is thinking blocks at the START of the merged
+ * assistant block. We strip reasoning parts from every assistant except the
+ * first in each consecutive assistant run. After AI SDK merges the run, the
+ * assistant content becomes [thinking, text, text, tool_use, text, …] — valid.
+ *
+ * Trade-off: the model loses visibility into its own intermediate step
+ * reasoning for earlier steps of a multi-step turn. The first step's reasoning
+ * is preserved, which carries enough cache continuity for Anthropic.
+ *
+ * This is an upstream bug in @ai-sdk/anthropic's `groupIntoBlocks`:
+ *   https://github.com/vercel/ai/blob/main/packages/anthropic/src/
+ *     convert-to-anthropic-messages-prompt.ts  (case 'assistant')
+ * Same class of bug was fixed for Bedrock in vercel/ai#13583/#13972.
+ */
+export function stripReasoningFromMergedAssistants(messages: MessageLike[]): number {
+    let stripped = 0;
+    let prevRole: string | undefined;
+
+    for (const message of messages) {
+        const role = message.info.role;
+        if (role === "assistant" && prevRole === "assistant") {
+            // Not the first of a consecutive assistant run — strip reasoning.
+            for (let i = message.parts.length - 1; i >= 0; i--) {
+                const part = message.parts[i];
+                if (!isRecord(part)) continue;
+                const partType = part.type as string;
+                if (partType === "reasoning") {
+                    message.parts.splice(i, 1);
+                    stripped++;
+                }
+            }
+        }
+        prevRole = role;
+    }
+
+    return stripped;
 }
 
 export function stripProcessedImages(
