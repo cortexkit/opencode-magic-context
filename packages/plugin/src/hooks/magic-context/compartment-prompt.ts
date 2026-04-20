@@ -12,6 +12,7 @@ Compartment rules:
 - Do not create compartments for magic-context commands or tool-only noise.
 - If the input ends mid-topic, leave it out and report its first message index in <unprocessed_from>.
 - All compartment start/end ordinals and <unprocessed_from> must use the absolute raw message numbers shown in the input. Never renumber relative to this chunk.
+- Every displayed raw message ordinal in the input MUST appear in exactly one compartment. Gaps between compartments are invalid. When a displayed block is pure tool noise (e.g. a long "TC: ..." run with no narrative text), do NOT skip it — extend the preceding compartment's \`end\` to absorb the range, or include it inside the current compartment if the block falls within an ongoing work unit. Never create a dedicated compartment just to cover a tool-only run.
 - Only emit NEW compartments for the new messages. Do not re-emit existing compartments from the existing state.
 - Write comprehensive, detailed compartments. Include file paths, function names, commit hashes, config keys, and values when they matter.
 - Do not list every changed file. Do not narrate tool calls. Do not preserve dead-end exploration beyond a brief clause when needed.

@@ -8,33 +8,48 @@ import type {
 const MIN_RECOMP_CHUNK_TOKEN_BUDGET = 20;
 
 /**
- * Heal small gaps between adjacent compartments by expanding the previous compartment's
+ * Heal gaps between adjacent compartments by expanding the previous compartment's
  * endMessage forward to meet the next compartment's startMessage.
  *
- * The historian sometimes skips noise-only message ranges (tool calls, dropped placeholders,
- * system reminders) which produces valid summaries but non-contiguous ranges. Instead of
- * rejecting the output and burning a repair retry, we absorb the gap into the preceding
- * compartment's range — the skipped messages were noise anyway.
+ * Historian frequently skips tool-only blocks — blocks whose visible chunk content
+ * is TC: lines with no narrative text. That's a safe skip: no durable signal is lost.
+ * When we know (from the chunk's `toolOnlyRanges`) that a gap falls entirely within
+ * one of those tool-only ranges, we heal it regardless of size. This catches the common
+ * failure case of a 16–30+ message debug/build-test tool chain that historian correctly
+ * identified as pure noise.
  *
- * Gaps larger than MAX_HEALABLE_GAP are left untouched and will fail validation,
- * since large gaps likely indicate a real historian problem rather than skipped noise.
+ * For gaps not covered by tool-only ranges, we still apply a small safety net (≤15
+ * messages) for edge cases like boundary noise or dropped placeholders. Larger
+ * non-tool-only gaps likely indicate historian dropped real narrative and should
+ * fail validation to trigger a repair retry.
  *
  * Mutates the compartments array in place.
  */
 function healCompartmentGaps(
     compartments: Array<{ startMessage: number; endMessage: number }>,
+    toolOnlyRanges: ReadonlyArray<{ start: number; end: number }> = [],
 ): void {
-    const MAX_HEALABLE_GAP = 15;
+    const SAFETY_HEAL_GAP = 15;
 
     for (let i = 1; i < compartments.length; i++) {
         const prev = compartments[i - 1];
         const curr = compartments[i];
-        const expectedStart = prev.endMessage + 1;
-        const gapSize = curr.startMessage - expectedStart;
+        const gapStart = prev.endMessage + 1;
+        const gapEnd = curr.startMessage - 1;
+        const gapSize = gapEnd - gapStart + 1;
 
-        if (gapSize > 0 && gapSize <= MAX_HEALABLE_GAP) {
-            // Small gap — expand previous compartment to fill it
-            prev.endMessage = curr.startMessage - 1;
+        if (gapSize <= 0) continue;
+
+        // Heal if gap is fully within a single tool-only range (any size — the skipped
+        // messages were TC-only noise, no narrative lost).
+        const fullyInsideToolOnly = toolOnlyRanges.some(
+            (range) => range.start <= gapStart && range.end >= gapEnd,
+        );
+
+        // Or heal small gaps as a safety net for edge cases (boundary noise,
+        // dropped placeholders, or rare sub-threshold non-tool skips).
+        if (fullyInsideToolOnly || gapSize <= SAFETY_HEAL_GAP) {
+            prev.endMessage = gapEnd;
         }
     }
 }
@@ -46,6 +61,8 @@ export function validateHistorianOutput(
         startIndex: number;
         endIndex: number;
         lines: Array<{ ordinal: number; messageId: string }>;
+        /** Optional — when provided, gaps inside these ranges heal at any size. */
+        toolOnlyRanges?: ReadonlyArray<{ start: number; end: number }>;
     },
     _priorCompartments: StoredCompartmentRange[],
     sequenceOffset: number,
@@ -59,9 +76,9 @@ export function validateHistorianOutput(
     }
 
     // Heal gaps between compartments by expanding the previous compartment's endMessage.
-    // The historian sometimes skips noise-only message ranges (tool calls, dropped placeholders)
-    // which produces valid summaries but invalid contiguous ranges.
-    healCompartmentGaps(parsed.compartments);
+    // Tool-only ranges heal at any size (historian legitimately skipped pure tool noise);
+    // other small gaps heal up to a conservative safety limit.
+    healCompartmentGaps(parsed.compartments, chunk.toolOnlyRanges);
 
     const mapped = mapParsedCompartmentsToChunk(parsed.compartments, chunk, sequenceOffset);
     if (!mapped.ok) {

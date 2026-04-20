@@ -13,6 +13,13 @@ export interface ChunkBlock {
     parts: string[];
     meta: SessionChunkLine[];
     commitHashes: string[];
+    /**
+     * True when every part in this block came from tool-call summaries only
+     * (no textual narrative from the user or assistant). Historian often skips
+     * such blocks — that's safe as long as we know the skipped range is
+     * tool-only, so we mark the block here and let validation absorb the gap.
+     */
+    isToolOnly: boolean;
 }
 
 const COMMIT_HASH_PATTERN = /`?\b([0-9a-f]{6,12})\b`?/gi;

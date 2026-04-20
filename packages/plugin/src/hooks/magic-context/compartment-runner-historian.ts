@@ -39,6 +39,9 @@ export async function runValidatedHistorianPass(args: {
         startIndex: number;
         endIndex: number;
         lines: Array<{ ordinal: number; messageId: string }>;
+        /** Tool-only ordinal ranges — passed through to validator so gaps
+         *  inside these ranges heal regardless of size. */
+        toolOnlyRanges?: ReadonlyArray<{ start: number; end: number }>;
     };
     priorCompartments: StoredCompartmentRange[];
     sequenceOffset: number;
@@ -148,6 +151,7 @@ async function runEditorPassOrFallback(args: {
         startIndex: number;
         endIndex: number;
         lines: Array<{ ordinal: number; messageId: string }>;
+        toolOnlyRanges?: ReadonlyArray<{ start: number; end: number }>;
     };
     priorCompartments: StoredCompartmentRange[];
     sequenceOffset: number;
@@ -342,6 +346,7 @@ async function runFallbackHistorianPass(args: {
         startIndex: number;
         endIndex: number;
         lines: Array<{ ordinal: number; messageId: string }>;
+        toolOnlyRanges?: ReadonlyArray<{ start: number; end: number }>;
     };
     priorCompartments: StoredCompartmentRange[];
     sequenceOffset: number;

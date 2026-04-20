@@ -38,6 +38,14 @@ export interface SessionChunk {
     lines: SessionChunkLine[];
     /** Number of distinct commit clusters — assistant blocks with commits separated by meaningful user turns */
     commitClusterCount: number;
+    /**
+     * Contiguous ranges of raw message ordinals whose visible chunk content was
+     * tool-only (TC: lines, no narrative text). Historian frequently skips such
+     * ranges entirely — that's safe, so validation absorbs gaps that fall fully
+     * within these ranges regardless of size. Gaps outside these ranges still
+     * fail validation and trigger a repair retry.
+     */
+    toolOnlyRanges: Array<{ start: number; end: number }>;
 }
 
 export function withRawSessionMessageCache<T>(fn: () => T): T {
@@ -122,6 +130,11 @@ export function readSessionChunk(
     const startOrdinal = Math.max(1, offset);
     const lines: string[] = [];
     const lineMeta: SessionChunkLine[] = [];
+    /**
+     * Tool-only block ranges captured at flush time. After the main loop finishes
+     * we merge adjacent ranges into contiguous `toolOnlyRanges` for the validator.
+     */
+    const flushedToolOnlyBlocks: Array<{ start: number; end: number }> = [];
     let totalTokens = 0;
     let messagesProcessed = 0;
     let lastOrdinal = startOrdinal - 1;
@@ -158,6 +171,17 @@ export function readSessionChunk(
         lines.push(blockText);
         lineMeta.push(...currentBlock.meta);
         totalTokens += blockTokens;
+
+        // Record the flushed block's range if it was pure tool-only content.
+        // Validator uses these ranges to absorb gaps of any size where historian
+        // legitimately skipped tool-only noise.
+        if (currentBlock.isToolOnly) {
+            flushedToolOnlyBlocks.push({
+                start: currentBlock.startOrdinal,
+                end: currentBlock.endOrdinal,
+            });
+        }
+
         currentBlock = null;
         return true;
     }
@@ -186,6 +210,8 @@ export function readSessionChunk(
                 currentBlock.endOrdinal = msg.ordinal;
                 currentBlock.parts.push(tcText);
                 currentBlock.meta.push(...pendingNoiseMeta, meta);
+                // Do NOT flip isToolOnly here — TC-only content merging into an
+                // existing A block keeps that block's narrative/tool-only status.
                 pendingNoiseMeta = [];
             } else {
                 if (!flushCurrentBlock()) break;
@@ -196,6 +222,8 @@ export function readSessionChunk(
                     parts: [tcText],
                     meta: [...pendingNoiseMeta, meta],
                     commitHashes: [],
+                    // Pure TC-only block — no narrative from text parts.
+                    isToolOnly: true,
                 };
                 pendingNoiseMeta = [];
             }
@@ -221,6 +249,11 @@ export function readSessionChunk(
             continue;
         }
 
+        // Narrative is present iff this message contributed at least one real text part.
+        // Tool summaries alone count as tool-only. User-role messages here always carry
+        // meaningful text (the no-text user branch returned above).
+        const msgHasNarrative = textParts.length > 0;
+
         if (currentBlock && currentBlock.role === role) {
             currentBlock.endOrdinal = msg.ordinal;
             currentBlock.parts.push(text);
@@ -229,6 +262,9 @@ export function readSessionChunk(
                 currentBlock.commitHashes,
                 compacted.commitHashes,
             );
+            // Once any message in the merged block contributes narrative, the block is
+            // no longer tool-only.
+            if (msgHasNarrative) currentBlock.isToolOnly = false;
             pendingNoiseMeta = [];
             continue;
         }
@@ -242,11 +278,26 @@ export function readSessionChunk(
             parts: [text],
             meta: [...pendingNoiseMeta, meta],
             commitHashes: [...compacted.commitHashes],
+            isToolOnly: !msgHasNarrative,
         };
         pendingNoiseMeta = [];
     }
 
     flushCurrentBlock();
+
+    // Merge adjacent tool-only block ranges into contiguous ranges. Adjacent
+    // means `next.start === prev.end + 1` — a pure tool chain spread across
+    // multiple successive flushed blocks becomes one merged range so validation
+    // can absorb the full gap in a single heal check.
+    const toolOnlyRanges: Array<{ start: number; end: number }> = [];
+    for (const range of flushedToolOnlyBlocks) {
+        const last = toolOnlyRanges[toolOnlyRanges.length - 1];
+        if (last && range.start === last.end + 1) {
+            last.end = range.end;
+        } else {
+            toolOnlyRanges.push({ start: range.start, end: range.end });
+        }
+    }
 
     return {
         startIndex: startOrdinal,
@@ -263,6 +314,7 @@ export function readSessionChunk(
         text: lines.join("\n"),
         lines: lineMeta,
         commitClusterCount: commitClusters,
+        toolOnlyRanges,
     };
 }
 
