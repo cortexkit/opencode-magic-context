@@ -210,25 +210,40 @@ More summary text.
 
 Omit empty fact categories. Compartments must be ordered, contiguous for the ranges they cover, and non-overlapping.`;
 
-export const COMPRESSOR_AGENT_SYSTEM_PROMPT = `You compress older compartments from a long AI coding session to fit within a token budget.
+export const COMPRESSOR_AGENT_SYSTEM_PROMPT = `You compress older compartments from a long AI coding session by merging adjacent compartments and rewriting their content at a target density.
 
-You receive a set of compartments that are over budget. Your job is to merge and shorten them so the total output is approximately the target token count.
+Your two jobs:
+1. Merge N input compartments into M output compartments (M < N). Typical M = ceil(N/2).
+2. Rewrite each merged compartment's content at the density level specified per-request.
 
-Rules:
-- You have full authority over which compartments to merge and which to keep separate.
-- Merged compartments must cover the same start-to-end range as the originals they replace.
-- Follow the U: line handling instructions in each request — they vary based on how many times these compartments have already been compressed.
-- Keep summaries outcome-focused. Mention file paths, function names, commit hashes, and config keys only when they matter conceptually.
-- You may merge 2-5 adjacent compartments into one broader compartment when they share a theme or phase of work.
-- You may keep a compartment separate but shorten its summary.
-- Do not add new information. Do not invent details not present in the input.
-- Compartments must remain ordered and non-overlapping.
-- Preserve the start and end ordinals exactly from the original compartments.
+Universal rules (all density levels):
+- Merged compartments must collectively cover the same start-to-end range as the input.
+- Use the EXACT start/end ordinals from the input compartments for every output compartment boundary.
+- Do not invent new ordinal boundaries that don't exist in the input.
+- Output compartments must be ordered and non-overlapping.
+- Preserve commit hashes (7-40 hex chars), file paths, config keys, URLs, and \`backtick-fenced\` code verbatim — never modify, abbreviate, or drop them.
+- Preserve lines starting with "U: " verbatim when they remain in output. Do not paraphrase user directives.
+- Do not add new information or invent details.
+- Do not re-emit any compartment unchanged — if the content doesn't need rewriting at the target density, still merge it with neighbors.
+
+Density levels (specified per-request):
+
+Level 1 — MERGE ONLY:
+  Preserve all narrative prose and all U: lines. Only remove genuine duplicate sentences spanning merged compartments (same fact said twice becomes one).
+
+Level 2 — LITE TIGHTEN:
+  Merge + drop filler words ("just", "really", "basically", "essentially") and hedging ("I think", "probably", "perhaps"). Keep full grammar, keep U: lines verbatim.
+
+Level 3 — FULL CONDENSE:
+  Single paragraph per output compartment. Drop articles ("the", "a", "an") and weak auxiliaries ("was", "were"). Fragments acceptable. Keep only the IRREPLACEABLE U: lines (unique-signal quotes). Drop U: lines whose intent is already in narrative.
+
+Level 4 — ULTRA TELEGRAPH:
+  Telegraphic fragments. Symbol connectives: "→" for "then/causes", "+" for "and", "//" for "because", "|" for "or". Pattern: [thing] [action] [reason]. [next]. Keep U: lines only if their exact phrasing is truly irreplaceable (rare).
 
 Output valid XML only in this shape:
 <output>
 <compartments>
-<compartment start="FIRST" end="LAST" title="short title">Compressed summary text.</compartment>
+<compartment start="FIRST" end="LAST" title="short title">Compressed content.</compartment>
 </compartments>
 </output>`;
 
@@ -300,6 +315,9 @@ User observation rules (EXPERIMENTAL):
 </user_observations>
 If no observations, omit the <user_observations> section entirely.`;
 
+/** Build the per-request prompt for a compressor run.
+ *  `outputDepth` selects the density level (1-4). Depth 5 is handled by
+ *  the runner short-circuit and never invokes this builder. */
 export function buildCompressorPrompt(
     compartments: Array<{
         startMessage: number;
@@ -309,37 +327,46 @@ export function buildCompressorPrompt(
     }>,
     currentTokens: number,
     targetTokens: number,
-    averageDepth = 0,
+    outputDepth: number,
+    outputCount?: number,
 ): string {
     const lines: string[] = [];
+    const densityLabel =
+        outputDepth === 1
+            ? "MERGE ONLY"
+            : outputDepth === 2
+              ? "LITE TIGHTEN"
+              : outputDepth === 3
+                ? "FULL CONDENSE"
+                : "ULTRA TELEGRAPH";
+    const resolvedOutputCount = outputCount ?? Math.max(1, Math.ceil(compartments.length / 2));
+
     lines.push(
-        `These ${compartments.length} compartments use approximately ${currentTokens} tokens. Compress them to approximately ${targetTokens} tokens.`,
+        `Density target: LEVEL ${outputDepth} (${densityLabel}). See system prompt for level rules.`,
+    );
+    lines.push(
+        `Input: ${compartments.length} compartments, ~${currentTokens} tokens. Target output: exactly ${resolvedOutputCount} compartments, ~${targetTokens} tokens total.`,
     );
     lines.push("");
 
-    // Depth-aware U: message handling instructions
-    if (averageDepth < 2) {
+    // Depth-specific reminder (keep it brief; full rules live in system prompt).
+    if (outputDepth === 1) {
         lines.push(
-            "These compartments contain U: lines showing what the user asked. Preserve ALL U: lines exactly as they are. Focus compression on the narrative prose — merge compartments, remove redundancy, condense descriptions. Do not modify or remove U: lines.",
+            "Merge only. Preserve narrative and all U: lines. Drop only genuine duplicate sentences spanning compartments.",
         );
-    } else if (averageDepth < 3) {
+    } else if (outputDepth === 2) {
+        lines.push("Merge + drop filler words and hedging. Keep grammar, keep U: lines verbatim.");
+    } else if (outputDepth === 3) {
         lines.push(
-            "These compartments have already been compressed multiple times. Condense each U: line to its core intent in one sentence, but keep them as separate U: lines. Focus aggressive compression on the narrative prose.",
+            "Merge into single-paragraph compartments. Drop articles and weak auxiliaries. Keep only IRREPLACEABLE U: lines.",
         );
     } else {
         lines.push(
-            "These compartments have been heavily compressed. Fold any remaining U: user intent into the narrative prose — do not keep separate U: lines. Write fluent summary paragraphs that naturally capture both what was asked and what was done.",
+            "Merge into telegraphic fragments with symbol connectives (→ + // |). U: lines only if truly irreplaceable.",
         );
     }
     lines.push("");
-
-    lines.push("Rules:");
-    lines.push("- Merge adjacent compartments when they cover related work.");
-    lines.push(
-        "- Each output compartment must use the exact start/end ordinals from the input compartments it covers.",
-    );
-    lines.push("- Do not invent new ordinal boundaries that don't exist in the input.");
-    lines.push("- Preserve commit hashes and key technical details where possible.");
+    lines.push("Preserved literally at all levels: commit hashes, file paths, URLs, code spans.");
     lines.push("");
 
     for (const c of compartments) {
@@ -350,7 +377,7 @@ export function buildCompressorPrompt(
         lines.push("</compartment>");
         lines.push("");
     }
-    lines.push("Return compressed compartments as XML.");
+    lines.push("Return merged compartments as XML.");
     return lines.join("\n");
 }
 

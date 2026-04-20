@@ -1,3 +1,4 @@
+import { DEFAULT_COMPRESSOR_COOLDOWN_MS } from "../../config/schema/magic-context";
 import { getLastCompartmentEndMessage } from "../../features/magic-context/compartment-storage";
 import { type ContextDatabase, updateSessionMeta } from "../../features/magic-context/storage";
 import type { PluginContext } from "../../plugin/types";
@@ -16,10 +17,10 @@ import type { MessageLike } from "./transform-operations";
 
 const lastCompressorRunBySession = new Map<string, number>();
 
-function isCompressorOnCooldown(sessionId: string): boolean {
+function isCompressorOnCooldown(sessionId: string, cooldownMs: number): boolean {
     const lastRun = lastCompressorRunBySession.get(sessionId);
     if (!lastRun) return false;
-    return Date.now() - lastRun < 600_000; // 10 minutes
+    return Date.now() - lastRun < cooldownMs;
 }
 
 function markCompressorRun(sessionId: string): void {
@@ -59,6 +60,12 @@ interface RunCompartmentPhaseArgs {
     experimentalUserMemories?: boolean;
     /** When true, run a second editor pass after historian to clean U: lines. */
     historianTwoPass?: boolean;
+    /** Compressor floor ratio: floor = ceil(lastEndMessage / minCompartmentRatio). */
+    compressorMinCompartmentRatio?: number;
+    /** Compressor max merge depth (1-5). Compartments at or above this depth are skipped. */
+    compressorMaxMergeDepth?: number;
+    /** Compressor cooldown in milliseconds between background runs. */
+    compressorCooldownMs?: number;
 }
 
 export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promise<{
@@ -155,6 +162,8 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
                 experimentalCompactionMarkers: args.experimentalCompactionMarkers,
                 experimentalUserMemories: args.experimentalUserMemories,
                 historianTwoPass: args.historianTwoPass,
+                compressorMinCompartmentRatio: args.compressorMinCompartmentRatio,
+                compressorMaxMergeDepth: args.compressorMaxMergeDepth,
             });
             compartmentInProgress = true;
         }
@@ -191,6 +200,8 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
                 experimentalCompactionMarkers: args.experimentalCompactionMarkers,
                 experimentalUserMemories: args.experimentalUserMemories,
                 historianTwoPass: args.historianTwoPass,
+                compressorMinCompartmentRatio: args.compressorMinCompartmentRatio,
+                compressorMaxMergeDepth: args.compressorMaxMergeDepth,
             });
             activeRun = getActiveCompartmentRun(args.sessionId);
         } else if (!activeRun && hasEligibleHistoryForCompartment()) {
@@ -253,7 +264,10 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
         args.client &&
         !compartmentInProgress &&
         !awaitedCompartmentRun &&
-        !isCompressorOnCooldown(args.sessionId)
+        !isCompressorOnCooldown(
+            args.sessionId,
+            args.compressorCooldownMs ?? DEFAULT_COMPRESSOR_COOLDOWN_MS,
+        )
     ) {
         // Fire-and-forget: compressor runs in background, results land on next bust pass
         markCompressorRun(args.sessionId);
@@ -264,6 +278,8 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
             directory: args.compartmentDirectory,
             historyBudgetTokens: args.historyBudgetTokens,
             historianTimeoutMs: args.historianTimeoutMs,
+            minCompartmentRatio: args.compressorMinCompartmentRatio,
+            maxMergeDepth: args.compressorMaxMergeDepth,
         })
             .then((compressed) => {
                 if (compressed) {

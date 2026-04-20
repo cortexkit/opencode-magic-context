@@ -74,6 +74,7 @@ Higher-tier models with longer cache windows benefit from a longer TTL. Setting 
 | `history_budget_percentage` | `number` (0.05–0.5) | `0.15` | Fraction of usable context (`context_limit × execute_threshold`) reserved for the history block. Triggers compression when exceeded. |
 | `compaction_markers` | `boolean` | `true` | Inject compaction boundaries into OpenCode's DB after historian publishes. Reduces transform input size for long sessions. |
 | `commit_cluster_trigger` | `object` | See below | Controls the commit-cluster historian trigger. |
+| `compressor` | `object` | See below | Controls the background compressor that merges older compartments when the history block exceeds its budget. |
 
 ### `commit_cluster_trigger`
 
@@ -87,6 +88,56 @@ A **commit cluster** is a distinct work phase where the agent made one or more g
   }
 }
 ```
+
+### `compressor`
+
+Compressor is a background pass that runs when the rendered `<session-history>` block exceeds its budget. It merges older compartments using progressively aggressive **caveman-style** compression at each depth level, enforcing style consistency via a deterministic post-process after the historian LLM call. Each compartment range can be compressed at most `max_merge_depth` times.
+
+**Depth tiers** (applied progressively as compartments are re-compressed):
+
+| Depth | Style | What happens |
+|---|---|---|
+| 1 | **Merge only** | Preserve narrative and all U: lines. Drop only duplicates spanning compartments. |
+| 2 | **Lite caveman** | Drop filler words (just, really, basically) and hedging. Keep grammar. |
+| 3 | **Full caveman** | Drop articles (the, a, an), weak auxiliaries. Fragments OK. Single paragraph per compartment. |
+| 4 | **Ultra caveman** | Telegraphic. Symbol connectives (`→`, `+`, `//`, `\|`). Pattern: `[thing] [action] [reason]`. |
+| 5 | **Title-only collapse** | Content cleared (no LLM call). Raw messages recoverable via `ctx_expand`. |
+
+Inspired by the [caveman Claude Code skill](https://github.com/JuliusBrussee/caveman) which validated telegraph-style compression as LLM-friendly (and saves tokens without tokenizer fallback issues that character-dropping causes).
+
+```jsonc
+{
+  "compressor": {
+    "enabled": true,                  // default: true
+    "min_compartment_ratio": 1000,     // default: 1000 (floor = ceil(total_raw_messages / ratio))
+    "max_merge_depth": 5,             // default: 5 (1-5, deeper = more aggressive)
+    "cooldown_ms": 600000,            // default: 600000 (10 min between background runs)
+    "max_compartments_per_pass": 15,  // default: 15 (LLM batch cap)
+    "grace_compartments": 10          // default: 10 (newest N compartments never compressed)
+  }
+}
+```
+
+**Merge ratios per depth** (applied per LLM pass — small ratios preserve more narrative):
+
+| Depth transition | Ratio | Shape |
+|---|---|---|
+| 0 → 1 | 1.33× (4:3) | Narrative merge; preserve all `U:` lines |
+| 1 → 2 | 1.5× (3:2) | Drop filler, keep grammar (caveman-lite) |
+| 2 → 3 | 2× (2:1) | Paragraph, fragments OK (caveman-full) |
+| 3 → 4 | 2× (2:1) | Telegraph + symbol connectives (caveman-ultra) |
+| 4 → 5 | — | Title-only collapse (no LLM, recoverable via `ctx_expand`) |
+
+**Selection strategy:** The compressor picks the oldest contiguous run of compartments that share the SAME rounded compression depth (up to `max_compartments_per_pass`). This progresses naturally: depth-0 bands get compressed first → depth-1 bands compressed next → and so on. Each run goes through one LLM call.
+
+**Floor protection:** The compressor never reduces your session's compartment count below `ceil(total_raw_messages / min_compartment_ratio)`. For a 20K-message session with the default ratio, that's a floor of 20 compartments.
+
+**Grace period:** The newest `grace_compartments` compartments are always excluded from compression. This protects freshly-published historian output from being re-compressed before it has been used. Default is 10, which works well even for long autonomous runs that publish many compartments per hour.
+
+**Ordinal snap:** When the LLM drifts by ±1-2 ordinals on merged boundaries (e.g. outputs `start=8161` when the actual input boundary is `8160`), the runtime snaps those values to the enclosing input compartment's canonical boundary rather than rejecting the whole pass. Snaps are logged for observability.
+
+**Disable entirely:** Set `compressor.enabled: false` to skip all background compression. Older sessions will simply carry a larger history footprint.
+
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -401,6 +452,12 @@ When enabled, dreamer analyzes which files each session's agent reads most frequ
   "drop_tool_structure": true,
   "history_budget_percentage": 0.15,
   "compaction_markers": true,
+  "compressor": {
+    "enabled": true,
+    "min_compartment_ratio": 1000,
+    "max_merge_depth": 5,
+    "cooldown_ms": 600000
+  },
 
   "historian": {
     "model": "github-copilot/gpt-5.4",

@@ -166,6 +166,60 @@
       "default": true,
       "description": "Inject compaction boundaries into OpenCode's DB after historian publishes. Reduces transform input size for long sessions by letting OpenCode's filterCompacted skip older messages."
     },
+    "compressor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable background compressor. When false, history block compression never runs and older sessions may carry a larger history footprint."
+        },
+        "min_compartment_ratio": {
+          "type": "number",
+          "minimum": 100,
+          "maximum": 10000,
+          "default": 1000,
+          "description": "Floor = ceil(total_raw_messages / min_compartment_ratio). Compressor never reduces compartment count below this floor."
+        },
+        "max_merge_depth": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 5,
+          "default": 5,
+          "description": "Maximum compression depth a compartment range can reach. Depth 5 collapses to title-only (recoverable via ctx_expand). Depths 1-4 apply caveman lite/full/ultra compression."
+        },
+        "cooldown_ms": {
+          "type": "number",
+          "minimum": 60000,
+          "default": 600000,
+          "description": "Minimum milliseconds between background compressor runs for a session."
+        },
+        "max_compartments_per_pass": {
+          "type": "number",
+          "minimum": 3,
+          "maximum": 50,
+          "default": 15,
+          "description": "Cap on compartments sent to the LLM in one pass. Smaller batches avoid ordinal drift and dedup mistakes on large inputs."
+        },
+        "grace_compartments": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 10,
+          "description": "Number of newest compartments always excluded from compression. Protects freshly published historian output from being re-compressed before it has been used."
+        }
+      },
+      "additionalProperties": false,
+      "default": {
+        "enabled": true,
+        "min_compartment_ratio": 1000,
+        "max_merge_depth": 5,
+        "cooldown_ms": 600000,
+        "max_compartments_per_pass": 15,
+        "grace_compartments": 10
+      },
+      "description": "Background compressor configuration — merges older compartments with caveman-style compression when the history block exceeds its budget."
+    },
     "experimental": {
       "type": "object",
       "properties": {

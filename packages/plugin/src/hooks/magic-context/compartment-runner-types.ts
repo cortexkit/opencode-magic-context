@@ -24,6 +24,10 @@ export interface CompartmentRunnerDeps {
     /** When true, run an editor pass after successful historian output to clean
      *  low-signal U: lines and cross-compartment duplicates. */
     historianTwoPass?: boolean;
+    /** Compressor floor ratio: floor = ceil(lastEndMessage / minCompartmentRatio). */
+    compressorMinCompartmentRatio?: number;
+    /** Compressor max merge depth (1-5). Compartments at or above this depth are skipped. */
+    compressorMaxMergeDepth?: number;
 }
 
 export interface CandidateCompartment {

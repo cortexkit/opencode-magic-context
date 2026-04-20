@@ -8,6 +8,26 @@ export const DEFAULT_EXECUTE_THRESHOLD_PERCENTAGE = 65;
 export const DEFAULT_HISTORIAN_TIMEOUT_MS = 300_000;
 export const DEFAULT_HISTORY_BUDGET_PERCENTAGE = 0.15;
 export const DEFAULT_LOCAL_EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
+/** Compressor defaults — see CompressorConfigSchema below for details. */
+export const DEFAULT_COMPRESSOR_MIN_COMPARTMENT_RATIO = 1000;
+export const DEFAULT_COMPRESSOR_MAX_MERGE_DEPTH = 5;
+export const DEFAULT_COMPRESSOR_COOLDOWN_MS = 600_000;
+/** Max compartments merged in one LLM pass. LLM quality degrades with larger inputs,
+ *  and smaller batches reduce ordinal-drift risk when the model outputs merged boundaries. */
+export const DEFAULT_COMPRESSOR_MAX_COMPARTMENTS_PER_PASS = 15;
+/** Number of newest compartments always excluded from compression.
+ *  Protects freshly-published historian compartments from immediate re-compression,
+ *  which would lose narrative quality before the agent has even used the compartment. */
+export const DEFAULT_COMPRESSOR_GRACE_COMPARTMENTS = 10;
+/** Output count at each depth = ceil(input / ratio).
+ *  Lower ratios = gentler compression. Depth 5 is title-only (no LLM call). */
+export const COMPRESSOR_MERGE_RATIO_BY_DEPTH: Record<number, number> = {
+    1: 1.33, // 4:3 — merge only, preserve narrative + U: lines
+    2: 1.5, // 3:2 — lite caveman
+    3: 2.0, // 2:1 — full caveman
+    4: 2.0, // 2:1 — ultra caveman (caveman post-process does heavy lifting)
+    5: 0, // title-only collapse (no merge, no LLM)
+};
 
 export const DREAMER_TASKS = [
     "consolidate",
@@ -141,6 +161,14 @@ export interface MagicContextConfig {
         min_clusters: number;
     };
     compaction_markers: boolean;
+    compressor: {
+        enabled: boolean;
+        min_compartment_ratio: number;
+        max_merge_depth: number;
+        cooldown_ms: number;
+        max_compartments_per_pass: number;
+        grace_compartments: number;
+    };
     experimental: {
         user_memories: {
             enabled: boolean;
@@ -231,6 +259,62 @@ export const MagicContextConfigSchema = z
          *  After historian publishes compartments, a compaction boundary is written into
          *  OpenCode's message/part tables so older messages are skipped at load time. Default: true. */
         compaction_markers: z.boolean().default(true),
+        /** Compressor configuration — controls second-pass compression of older
+         *  compartments when the rendered history block exceeds its budget.
+         *  The compressor merges adjacent compartments and applies progressively
+         *  aggressive caveman-style compression at deeper depths. */
+        compressor: z
+            .object({
+                /** Enable background compressor. When false, history block compression
+                 *  never runs, so very old sessions may carry a larger history footprint.
+                 *  (default: true) */
+                enabled: z.boolean().default(true),
+                /** Floor = ceil(total_raw_messages / min_compartment_ratio).
+                 *  Compressor will never reduce session compartment count below this
+                 *  floor. Lower ratio = more compartments preserved. Prevents runaway
+                 *  merging into a single mega-compartment. (min: 100, max: 10000, default: 1000) */
+                min_compartment_ratio: z
+                    .number()
+                    .min(100)
+                    .max(10000)
+                    .default(DEFAULT_COMPRESSOR_MIN_COMPARTMENT_RATIO),
+                /** Maximum compression depth for any compartment range. At depth 5,
+                 *  compartments are collapsed to title-only (content recoverable via
+                 *  ctx_expand). Depths 1-4 apply caveman-lite/full/ultra compression.
+                 *  (min: 1, max: 5, default: 5) */
+                max_merge_depth: z
+                    .number()
+                    .min(1)
+                    .max(5)
+                    .default(DEFAULT_COMPRESSOR_MAX_MERGE_DEPTH),
+                /** Minimum milliseconds between background compressor runs for a session.
+                 *  (min: 60000, default: 600000 = 10 min) */
+                cooldown_ms: z.number().min(60_000).default(DEFAULT_COMPRESSOR_COOLDOWN_MS),
+                /** Max compartments the compressor will send to one LLM call in a single pass.
+                 *  Keeping this low avoids LLM ordinal drift and dedup mistakes on large inputs.
+                 *  (min: 3, max: 50, default: 15) */
+                max_compartments_per_pass: z
+                    .number()
+                    .min(3)
+                    .max(50)
+                    .default(DEFAULT_COMPRESSOR_MAX_COMPARTMENTS_PER_PASS),
+                /** Number of newest compartments always excluded from compression.
+                 *  Protects freshly published historian output from being re-compressed before it
+                 *  has been used. (min: 0, max: 100, default: 10) */
+                grace_compartments: z
+                    .number()
+                    .min(0)
+                    .max(100)
+                    .default(DEFAULT_COMPRESSOR_GRACE_COMPARTMENTS),
+            })
+            .default({
+                enabled: true,
+                min_compartment_ratio: DEFAULT_COMPRESSOR_MIN_COMPARTMENT_RATIO,
+                max_merge_depth: DEFAULT_COMPRESSOR_MAX_MERGE_DEPTH,
+                cooldown_ms: DEFAULT_COMPRESSOR_COOLDOWN_MS,
+                max_compartments_per_pass: DEFAULT_COMPRESSOR_MAX_COMPARTMENTS_PER_PASS,
+                grace_compartments: DEFAULT_COMPRESSOR_GRACE_COMPARTMENTS,
+            }),
         /** Embedding provider configuration */
         embedding: EmbeddingConfigSchema.default({
             provider: "local",

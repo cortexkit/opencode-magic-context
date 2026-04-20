@@ -1,10 +1,16 @@
 import type { Database } from "bun:sqlite";
-import { DEFAULT_HISTORIAN_TIMEOUT_MS } from "../../config/schema/magic-context";
+import {
+    COMPRESSOR_MERGE_RATIO_BY_DEPTH,
+    DEFAULT_COMPRESSOR_GRACE_COMPARTMENTS,
+    DEFAULT_COMPRESSOR_MAX_COMPARTMENTS_PER_PASS,
+    DEFAULT_COMPRESSOR_MAX_MERGE_DEPTH,
+    DEFAULT_COMPRESSOR_MIN_COMPARTMENT_RATIO,
+    DEFAULT_HISTORIAN_TIMEOUT_MS,
+} from "../../config/schema/magic-context";
 import type { Compartment } from "../../features/magic-context/compartment-storage";
 import {
     getAverageCompressionDepth,
     getCompartments,
-    getMaxCompressionDepth,
     getSessionFacts,
     incrementCompressionDepth,
     replaceAllCompartmentState,
@@ -14,6 +20,8 @@ import { normalizeSDKResponse, promptSyncWithModelSuggestionRetry } from "../../
 import { extractLatestAssistantText } from "../../shared/assistant-message-extractor";
 import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
+import type { CavemanLevel } from "./caveman";
+import { cavemanCompress } from "./caveman";
 import { parseCompartmentOutput } from "./compartment-parser";
 import { buildCompressorPrompt } from "./compartment-prompt";
 import { estimateTokens } from "./read-session-formatting";
@@ -27,6 +35,33 @@ export interface CompressorDeps {
     directory: string;
     historyBudgetTokens: number;
     historianTimeoutMs?: number;
+    /** Floor = ceil(lastEndMessage / minCompartmentRatio). Default 1000. */
+    minCompartmentRatio?: number;
+    /** Maximum depth any compartment range can be compressed to. Default 5. */
+    maxMergeDepth?: number;
+    /** Cap on compartments sent to the LLM in one pass. Default 15. */
+    maxCompartmentsPerPass?: number;
+    /** Newest compartments always excluded from compression. Default 10. */
+    graceCompartments?: number;
+}
+
+/** Depth → caveman level mapping. Depth 1 = merge only (no caveman post-process).
+ *  Depths 2-4 apply caveman lite/full/ultra. Depth 5 short-circuits (title only). */
+function cavemanLevelForDepth(outputDepth: number): CavemanLevel | null {
+    if (outputDepth <= 1) return null;
+    if (outputDepth === 2) return "lite";
+    if (outputDepth === 3) return "full";
+    if (outputDepth === 4) return "ultra";
+    // depth 5 handled separately (title-only short-circuit)
+    return null;
+}
+
+interface ScoredCompartment {
+    compartment: Compartment;
+    index: number;
+    tokenEstimate: number;
+    averageDepth: number;
+    score: number;
 }
 
 /**
@@ -35,6 +70,9 @@ export interface CompressorDeps {
  */
 export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<boolean> {
     const { db, sessionId, historyBudgetTokens } = deps;
+    const minCompartmentRatio =
+        deps.minCompartmentRatio ?? DEFAULT_COMPRESSOR_MIN_COMPARTMENT_RATIO;
+    const maxMergeDepth = deps.maxMergeDepth ?? DEFAULT_COMPRESSOR_MAX_MERGE_DEPTH;
 
     const compartments = getCompartments(db, sessionId);
     if (compartments.length <= 1) return false;
@@ -44,7 +82,6 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
     // Estimate the current block size (compartments + facts, excluding memory block which is cached separately)
     let totalTokens = 0;
     for (const c of compartments) {
-        // Rough estimate: title + content + XML overhead
         totalTokens += estimateTokens(
             `<compartment start="${c.startMessage}" end="${c.endMessage}" title="${c.title}">\n${c.content}\n</compartment>\n`,
         );
@@ -61,14 +98,160 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
         return false;
     }
 
+    // Compute floor from total raw message coverage (ceil to round up).
+    const lastEndMessage = compartments[compartments.length - 1].endMessage;
+    const floor = Math.max(1, Math.ceil(lastEndMessage / minCompartmentRatio));
+    if (compartments.length <= floor) {
+        sessionLog(
+            sessionId,
+            `compressor: at floor (${compartments.length} compartments, floor=${floor} from ${lastEndMessage} msgs), skipping`,
+        );
+        return false;
+    }
+
     const overage = totalTokens - historyBudgetTokens;
     sessionLog(
         sessionId,
         `compressor: history block ~${totalTokens} tokens exceeds budget ${historyBudgetTokens} by ~${overage} tokens`,
     );
 
-    const maxDepth = getMaxCompressionDepth(db, sessionId);
-    const scoredCompartments = compartments.map((compartment, index) => {
+    const maxCompartmentsPerPass =
+        deps.maxCompartmentsPerPass ?? DEFAULT_COMPRESSOR_MAX_COMPARTMENTS_PER_PASS;
+    const graceCompartments = deps.graceCompartments ?? DEFAULT_COMPRESSOR_GRACE_COMPARTMENTS;
+
+    // Score every compartment: weighted age (older first) × inverse-depth (less compressed first).
+    const scored = scoreCompartments(db, sessionId, compartments);
+
+    // Cap how many compartments we can afford to pick without violating the floor.
+    // The compressor produces fewer output compartments than input; the difference
+    // reduces total compartment count, so we must leave enough headroom above floor.
+    const floorHeadroom = compartments.length - floor;
+    if (floorHeadroom < 1) {
+        sessionLog(
+            sessionId,
+            `compressor: no floor headroom (${compartments.length} compartments, floor=${floor}), skipping`,
+        );
+        return false;
+    }
+
+    const contiguous = findOldestContiguousSameDepthBand(scored, {
+        maxPickable: maxCompartmentsPerPass,
+        maxMergeDepth,
+        graceCompartments,
+        floorHeadroom,
+    });
+
+    if (contiguous.length < 2) {
+        sessionLog(
+            sessionId,
+            `compressor: no eligible same-depth band found (floor=${floor}, maxDepth=${maxMergeDepth}, grace=${graceCompartments}, maxPerPass=${maxCompartmentsPerPass}), skipping`,
+        );
+        return false;
+    }
+
+    const firstIndex = contiguous[0].index;
+    const lastIndex = contiguous[contiguous.length - 1].index;
+    const selectedCompartments = contiguous.map((s) => s.compartment);
+    const selectedTokens = contiguous.reduce((t, s) => t + s.tokenEstimate, 0);
+    const overallAverageDepth =
+        contiguous.reduce((sum, s) => sum + s.averageDepth, 0) / contiguous.length;
+    // Output depth is the average-before-increment rounded, plus 1 (incrementCompressionDepth
+    // adds exactly 1 to every ordinal). Clamped to [1, 5] because depths outside that
+    // aren't defined in the pipeline.
+    const outputDepth = Math.min(5, Math.max(1, Math.round(overallAverageDepth) + 1));
+    const mergeRatio = COMPRESSOR_MERGE_RATIO_BY_DEPTH[outputDepth] ?? 2.0;
+    const outputCount = mergeRatio > 0 ? Math.max(1, Math.ceil(contiguous.length / mergeRatio)) : 1;
+
+    sessionLog(
+        sessionId,
+        `compressor: scored ${compartments.length}, picked ${contiguous.length} contiguous (${selectedCompartments[0].startMessage}-${selectedCompartments[selectedCompartments.length - 1].endMessage}, ~${selectedTokens} tokens), avg_depth=${overallAverageDepth.toFixed(1)} → output_depth=${outputDepth} (ratio=${mergeRatio}, target=${outputCount} compartments)`,
+    );
+
+    // Depth 5 short-circuit: collapse to title-only. No LLM call needed.
+    if (outputDepth === 5) {
+        return finalizeCompression({
+            db,
+            sessionId,
+            compartments,
+            leadingCount: firstIndex,
+            trailingIndex: lastIndex + 1,
+            selectedCompartments,
+            compressed: selectedCompartments.map((c) => ({
+                startMessage: c.startMessage,
+                endMessage: c.endMessage,
+                startMessageId: c.startMessageId,
+                endMessageId: c.endMessageId,
+                title: c.title,
+                content: "",
+            })),
+            originalStart: selectedCompartments[0].startMessage,
+            originalEnd: selectedCompartments[selectedCompartments.length - 1].endMessage,
+            facts,
+            logLabel: `depth-5 title-only collapse (${selectedCompartments.length} → ${selectedCompartments.length})`,
+        });
+    }
+
+    // Depths 1-4: run LLM compressor with a depth-specific prompt.
+    try {
+        // Target output size scales with the per-depth merge ratio. At depth 1
+        // (1.33x) content is preserved; at deeper depths it compresses more.
+        const targetTokens = Math.max(200, Math.floor(selectedTokens / mergeRatio));
+        const llmCompressed = await runCompressorPass({
+            ...deps,
+            compartments: selectedCompartments,
+            currentTokens: selectedTokens,
+            targetTokens,
+            outputCount,
+            outputDepth,
+        });
+
+        if (!llmCompressed) {
+            sessionLog(sessionId, "compressor: LLM pass failed, keeping existing compartments");
+            return false;
+        }
+
+        // Apply caveman post-processing to enforce depth-specific style.
+        const level = cavemanLevelForDepth(outputDepth);
+        const finalCompressed = level
+            ? llmCompressed.map((c) => ({ ...c, content: cavemanCompress(c.content, level) }))
+            : llmCompressed;
+
+        return finalizeCompression({
+            db,
+            sessionId,
+            compartments,
+            leadingCount: firstIndex,
+            trailingIndex: lastIndex + 1,
+            selectedCompartments,
+            compressed: finalCompressed,
+            originalStart: selectedCompartments[0].startMessage,
+            originalEnd: selectedCompartments[selectedCompartments.length - 1].endMessage,
+            facts,
+            logLabel: `depth-${outputDepth} (${selectedCompartments.length} → ${finalCompressed.length})`,
+        });
+    } catch (error: unknown) {
+        sessionLog(sessionId, "compressor: unexpected error:", getErrorMessage(error));
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Selection helpers.
+// ---------------------------------------------------------------------------
+
+function scoreCompartments(
+    db: Database,
+    sessionId: string,
+    compartments: Compartment[],
+): ScoredCompartment[] {
+    // maxDepth is only used for normalization; we read it once.
+    let maxDepthAcrossSession = 0;
+    for (const c of compartments) {
+        const d = getAverageCompressionDepth(db, sessionId, c.startMessage, c.endMessage);
+        if (d > maxDepthAcrossSession) maxDepthAcrossSession = d;
+    }
+
+    return compartments.map((compartment, index) => {
         const tokenEstimate = estimateTokens(
             `<compartment start="${compartment.startMessage}" end="${compartment.endMessage}" title="${compartment.title}">\n${compartment.content}\n</compartment>\n`,
         );
@@ -79,229 +262,282 @@ export async function runCompressionPassIfNeeded(deps: CompressorDeps): Promise<
             compartment.endMessage,
         );
         const normalizedAge = compartments.length > 1 ? 1 - index / (compartments.length - 1) : 1;
-        const normalizedDepth = maxDepth > 0 ? 1 - averageDepth / maxDepth : 1;
+        const normalizedDepth =
+            maxDepthAcrossSession > 0 ? 1 - averageDepth / maxDepthAcrossSession : 1;
         const score = 0.7 * normalizedAge + 0.3 * normalizedDepth;
-        return {
-            compartment,
-            index,
-            tokenEstimate,
-            averageDepth,
-            score,
-        };
+        return { compartment, index, tokenEstimate, averageDepth, score };
     });
-
-    const sortedByScore = [...scoredCompartments].sort(
-        (left, right) => right.score - left.score || left.index - right.index,
-    );
-
-    const targetSelectionTokens = overage * 2;
-    let selectedCandidateTokens = 0;
-    const selectedCandidates: typeof scoredCompartments = [];
-
-    for (const compartment of sortedByScore) {
-        if (selectedCandidateTokens >= targetSelectionTokens) break;
-        selectedCandidates.push(compartment);
-        selectedCandidateTokens += compartment.tokenEstimate;
-    }
-
-    if (selectedCandidates.length < 2) {
-        sessionLog(sessionId, "compressor: not enough compartments to compress, skipping");
-        return false;
-    }
-
-    const selectedStartIndex = Math.min(
-        ...selectedCandidates.map((compartment) => compartment.index),
-    );
-    const selectedEndIndex = Math.max(
-        ...selectedCandidates.map((compartment) => compartment.index),
-    );
-    let selectedScoredCompartments = scoredCompartments.slice(
-        selectedStartIndex,
-        selectedEndIndex + 1,
-    );
-
-    // Guard: if expanding to a contiguous range inflated tokens beyond 3× the
-    // scored picks, fall back to the oldest contiguous subset of the scored picks.
-    const expandedTokens = selectedScoredCompartments.reduce((t, c) => t + c.tokenEstimate, 0);
-    if (expandedTokens > selectedCandidateTokens * 3) {
-        const sortedByIndex = [...selectedCandidates].sort((a, b) => a.index - b.index);
-        // Find longest contiguous run from the first scored pick
-        let runEnd = sortedByIndex[0].index;
-        for (let i = 1; i < sortedByIndex.length; i++) {
-            if (sortedByIndex[i].index === runEnd + 1) {
-                runEnd = sortedByIndex[i].index;
-            } else {
-                break;
-            }
-        }
-        selectedScoredCompartments = scoredCompartments.slice(sortedByIndex[0].index, runEnd + 1);
-        sessionLog(
-            sessionId,
-            `compressor: contiguous expansion was ${expandedTokens} tokens (>${selectedCandidateTokens * 3}), fell back to contiguous run of ${selectedScoredCompartments.length}`,
-        );
-    }
-
-    if (selectedScoredCompartments.length < 2) {
-        sessionLog(sessionId, "compressor: not enough adjacent compartments to compress, skipping");
-        return false;
-    }
-
-    const selectedCompartments = selectedScoredCompartments.map(
-        (scoredCompartment) => scoredCompartment.compartment,
-    );
-    const selectedTokens = selectedScoredCompartments.reduce(
-        (total, scoredCompartment) => total + scoredCompartment.tokenEstimate,
-        0,
-    );
-    const targetTokens = Math.floor(selectedTokens / 2);
-    const minAverageDepth = Math.min(
-        ...selectedScoredCompartments.map((compartment) => compartment.averageDepth),
-    );
-    const maxAverageDepth = Math.max(
-        ...selectedScoredCompartments.map((compartment) => compartment.averageDepth),
-    );
-    const minScore = Math.min(
-        ...selectedScoredCompartments.map((compartment) => compartment.score),
-    );
-    const maxScore = Math.max(
-        ...selectedScoredCompartments.map((compartment) => compartment.score),
-    );
-
-    sessionLog(
-        sessionId,
-        `compressor: scored ${compartments.length} compartments, selected ${selectedCompartments.length} (avg_depth range: ${minAverageDepth.toFixed(1)}-${maxAverageDepth.toFixed(1)}, score range: ${minScore.toFixed(1)}-${maxScore.toFixed(1)})`,
-    );
-    // Compute overall average depth for the selected range (used for U: line handling)
-    const overallAverageDepth =
-        selectedScoredCompartments.reduce((sum, c) => sum + c.averageDepth, 0) /
-        selectedScoredCompartments.length;
-    const depthTier =
-        overallAverageDepth < 2
-            ? "preserve U: lines"
-            : overallAverageDepth < 3
-              ? "condense U: lines"
-              : "fold U: into prose";
-
-    sessionLog(
-        sessionId,
-        `compressor: selected contiguous range ${selectedCompartments[0].startMessage}-${selectedCompartments[selectedCompartments.length - 1].endMessage} (~${selectedTokens} tokens), target ~${targetTokens} tokens, avg_depth=${overallAverageDepth.toFixed(1)} (${depthTier})`,
-    );
-
-    try {
-        const compressed = await runCompressorPass({
-            ...deps,
-            compartments: selectedCompartments,
-            currentTokens: selectedTokens,
-            targetTokens,
-            averageDepth: overallAverageDepth,
-        });
-
-        if (!compressed) {
-            sessionLog(
-                sessionId,
-                "compressor: compression pass failed, keeping existing compartments",
-            );
-            return false;
-        }
-
-        // Replace the selected compartments with compressed ones, keep the rest unchanged
-        const leadingCompartments = compartments.slice(0, selectedStartIndex);
-        const trailingCompartments = compartments.slice(selectedEndIndex + 1);
-        const allCompartments = [
-            ...leadingCompartments.map((c, i) => ({
-                sequence: i,
-                startMessage: c.startMessage,
-                endMessage: c.endMessage,
-                startMessageId: c.startMessageId,
-                endMessageId: c.endMessageId,
-                title: c.title,
-                content: c.content,
-            })),
-            ...compressed.map((c, i) => ({
-                sequence: leadingCompartments.length + i,
-                startMessage: c.startMessage,
-                endMessage: c.endMessage,
-                startMessageId: c.startMessageId,
-                endMessageId: c.endMessageId,
-                title: c.title,
-                content: c.content,
-            })),
-            ...trailingCompartments.map((c, i) => ({
-                sequence: leadingCompartments.length + compressed.length + i,
-                startMessage: c.startMessage,
-                endMessage: c.endMessage,
-                startMessageId: c.startMessageId,
-                endMessageId: c.endMessageId,
-                title: c.title,
-                content: c.content,
-            })),
-        ];
-
-        // Validate: compressed compartments must cover same range as originals
-        const originalStart = selectedCompartments[0].startMessage;
-        const originalEnd = selectedCompartments[selectedCompartments.length - 1].endMessage;
-        const compressedStart = compressed[0].startMessage;
-        const compressedEnd = compressed[compressed.length - 1].endMessage;
-
-        if (compressedStart !== originalStart || compressedEnd !== originalEnd) {
-            sessionLog(
-                sessionId,
-                `compressor: compressed range ${compressedStart}-${compressedEnd} doesn't match original ${originalStart}-${originalEnd}, aborting`,
-            );
-            return false;
-        }
-
-        // Validate internal contiguity: no gaps or overlaps between compressed compartments
-        for (let i = 1; i < compressed.length; i++) {
-            const prev = compressed[i - 1];
-            const curr = compressed[i];
-            if (curr.startMessage <= prev.endMessage) {
-                sessionLog(
-                    sessionId,
-                    `compressor: overlap at compartment ${i}: prev ends ${prev.endMessage}, curr starts ${curr.startMessage}, aborting`,
-                );
-                return false;
-            }
-            if (curr.startMessage > prev.endMessage + 1) {
-                sessionLog(
-                    sessionId,
-                    `compressor: gap at compartment ${i}: prev ends ${prev.endMessage}, curr starts ${curr.startMessage}, aborting`,
-                );
-                return false;
-            }
-        }
-
-        // Persist: replace compartments only, keep facts as-is
-        replaceAllCompartmentState(
-            db,
-            sessionId,
-            allCompartments,
-            facts.map((f) => ({ category: f.category, content: f.content })),
-        );
-        // Do NOT call clearInjectionCache here. The compressor may run in the
-        // background (fire-and-forget from the independent compressor path).
-        // Clearing the in-memory injection cache would cause the next defer pass
-        // to rebuild <session-history> with the new compressed compartments,
-        // producing different message[0] content and busting the LLM cache.
-        // Instead, let the stale in-memory cache persist. The next natural
-        // cache-busting pass (isCacheBusting=true) always bypasses the cache
-        // and reads fresh from DB, automatically picking up the compression.
-        incrementCompressionDepth(db, sessionId, originalStart, originalEnd);
-
-        sessionLog(
-            sessionId,
-            `compressor: replaced ${selectedCompartments.length} compartments with ${compressed.length} compressed compartments`,
-        );
-        sessionLog(
-            sessionId,
-            `compressor: incremented compression depth for messages ${originalStart}-${originalEnd}`,
-        );
-        return true;
-    } catch (error: unknown) {
-        sessionLog(sessionId, "compressor: unexpected error:", getErrorMessage(error));
-        return false;
-    }
 }
+
+interface SelectionConstraints {
+    /** Max compartments to pick per pass (LLM batch cap). */
+    maxPickable: number;
+    /** Max compression depth a compartment range can reach. */
+    maxMergeDepth: number;
+    /** Number of newest compartments always excluded (grace period). */
+    graceCompartments: number;
+    /** compartments.length - floor; we can't reduce below this without violating floor. */
+    floorHeadroom: number;
+}
+
+/**
+ * Find the oldest contiguous band of compartments that share the same rounded depth.
+ *
+ * Strategy: scan oldest→newest (low index first). Skip compartments at max depth,
+ * and skip the newest `graceCompartments` (grace period). Within the remaining
+ * scope, find the oldest run of 2+ consecutive compartments with the SAME rounded
+ * averageDepth. This keeps per-pass work uniform (same LLM prompt tier for all
+ * inputs) and naturally progresses: depth 0 bands get compressed first, producing
+ * depth 1 bands, which compress next, etc.
+ *
+ * Constraints:
+ * - Skip compartments with averageDepth >= maxMergeDepth (already maxed out).
+ * - Skip the newest graceCompartments (never compress fresh work).
+ * - Cap picks at maxPickable to avoid huge LLM inputs.
+ * - Cap picks at floorHeadroom to avoid violating min-compartment floor. Each
+ *   merge reduces count by (input - output), so limiting picks to floorHeadroom
+ *   guarantees we can't fall below floor even in the worst case (output = 1).
+ */
+function findOldestContiguousSameDepthBand(
+    scored: ScoredCompartment[],
+    constraints: SelectionConstraints,
+): ScoredCompartment[] {
+    const { maxPickable, maxMergeDepth, graceCompartments, floorHeadroom } = constraints;
+    // Absolute hard caps — picking beyond these is unsafe regardless of what the band looks like.
+    const hardMaxPick = Math.max(0, Math.min(maxPickable, floorHeadroom));
+    if (hardMaxPick < 2) return [];
+
+    // Scope excludes the newest graceCompartments: eligible range is [0, scanEnd).
+    const scanEnd = Math.max(0, scored.length - graceCompartments);
+    if (scanEnd < 2) return [];
+
+    let i = 0;
+    while (i < scanEnd) {
+        const c = scored[i];
+        if (!c || c.averageDepth >= maxMergeDepth) {
+            i++;
+            continue;
+        }
+        const anchorDepth = Math.round(c.averageDepth);
+        let j = i;
+        while (j < scanEnd) {
+            const entry = scored[j];
+            if (!entry) break;
+            if (entry.averageDepth >= maxMergeDepth) break;
+            if (Math.round(entry.averageDepth) !== anchorDepth) break;
+            if (j - i >= hardMaxPick) break;
+            j++;
+        }
+        const runLen = j - i;
+        if (runLen >= 2) {
+            return scored.slice(i, j);
+        }
+        // No viable run starting at i. Skip past the broken element to find the next candidate.
+        i = Math.max(j + 1, i + 1);
+    }
+
+    return [];
+}
+
+/**
+ * Snap LLM-output ordinals to enclosing input compartment boundaries.
+ *
+ * LLMs drift by ±1-2 ordinals when merging compartment ranges (e.g. outputting
+ * start=8161 when the actual input boundary is 8160). Exact-match lookup rejects
+ * these as "messageId missing" and fails the whole pass. Instead, interpret each
+ * LLM output range as "I merged these input compartments together" and find the
+ * input compartment whose [startMessage, endMessage] range contains the LLM's
+ * start / end. Use that input compartment's canonical startMessage+startMessageId
+ * (or endMessage+endMessageId).
+ *
+ * Returns null if any LLM ordinal falls outside every input compartment's range
+ * (indicates a hallucinated boundary, not drift). Contiguity/coverage are
+ * validated downstream by `finalizeCompression`.
+ */
+function snapLLMOutputToInputBoundaries(
+    llmOutput: Array<{
+        startMessage: number;
+        endMessage: number;
+        title: string;
+        content: string;
+    }>,
+    inputCompartments: Compartment[],
+): {
+    result: Array<{
+        startMessage: number;
+        endMessage: number;
+        startMessageId: string;
+        endMessageId: string;
+        title: string;
+        content: string;
+    }>;
+    snapCount: number;
+} | null {
+    // Input compartments are already sorted by startMessage (DB order). Binary search to find
+    // the compartment whose range [start, end] contains a given ordinal.
+    const sorted = [...inputCompartments].sort((a, b) => a.startMessage - b.startMessage);
+    const containing = (ord: number): Compartment | null => {
+        let lo = 0;
+        let hi = sorted.length - 1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const c = sorted[mid];
+            if (!c) return null;
+            if (ord < c.startMessage) hi = mid - 1;
+            else if (ord > c.endMessage) lo = mid + 1;
+            else return c;
+        }
+        return null;
+    };
+
+    const result: Array<{
+        startMessage: number;
+        endMessage: number;
+        startMessageId: string;
+        endMessageId: string;
+        title: string;
+        content: string;
+    }> = [];
+    let snapCount = 0;
+
+    for (const pc of llmOutput) {
+        const startOwner = containing(pc.startMessage);
+        const endOwner = containing(pc.endMessage);
+        if (!startOwner || !endOwner) {
+            // LLM invented an ordinal outside the input range — can't recover.
+            return null;
+        }
+        if (startOwner.startMessage !== pc.startMessage) snapCount++;
+        if (endOwner.endMessage !== pc.endMessage) snapCount++;
+        result.push({
+            startMessage: startOwner.startMessage,
+            endMessage: endOwner.endMessage,
+            startMessageId: startOwner.startMessageId,
+            endMessageId: endOwner.endMessageId,
+            title: pc.title,
+            content: pc.content,
+        });
+    }
+
+    return { result, snapCount };
+}
+
+// ---------------------------------------------------------------------------
+// Persistence.
+// ---------------------------------------------------------------------------
+
+interface FinalizeArgs {
+    db: Database;
+    sessionId: string;
+    compartments: Compartment[];
+    leadingCount: number;
+    trailingIndex: number;
+    selectedCompartments: Compartment[];
+    compressed: Array<{
+        startMessage: number;
+        endMessage: number;
+        startMessageId: string;
+        endMessageId: string;
+        title: string;
+        content: string;
+    }>;
+    originalStart: number;
+    originalEnd: number;
+    facts: Array<{ category: string; content: string }>;
+    logLabel: string;
+}
+
+function finalizeCompression(args: FinalizeArgs): boolean {
+    const {
+        db,
+        sessionId,
+        compartments,
+        leadingCount,
+        trailingIndex,
+        selectedCompartments: _selectedCompartments,
+        compressed,
+        originalStart,
+        originalEnd,
+        facts,
+        logLabel,
+    } = args;
+
+    const compressedStart = compressed[0].startMessage;
+    const compressedEnd = compressed[compressed.length - 1].endMessage;
+
+    if (compressedStart !== originalStart || compressedEnd !== originalEnd) {
+        sessionLog(
+            sessionId,
+            `compressor: compressed range ${compressedStart}-${compressedEnd} doesn't match original ${originalStart}-${originalEnd}, aborting`,
+        );
+        return false;
+    }
+
+    // Validate internal contiguity
+    for (let i = 1; i < compressed.length; i++) {
+        const prev = compressed[i - 1];
+        const curr = compressed[i];
+        if (curr.startMessage <= prev.endMessage) {
+            sessionLog(sessionId, `compressor: overlap at compartment ${i}, aborting`);
+            return false;
+        }
+        if (curr.startMessage > prev.endMessage + 1) {
+            sessionLog(sessionId, `compressor: gap at compartment ${i}, aborting`);
+            return false;
+        }
+    }
+
+    const leading = compartments.slice(0, leadingCount);
+    const trailing = compartments.slice(trailingIndex);
+
+    const allCompartments = [
+        ...leading.map((c, i) => ({
+            sequence: i,
+            startMessage: c.startMessage,
+            endMessage: c.endMessage,
+            startMessageId: c.startMessageId,
+            endMessageId: c.endMessageId,
+            title: c.title,
+            content: c.content,
+        })),
+        ...compressed.map((c, i) => ({
+            sequence: leading.length + i,
+            startMessage: c.startMessage,
+            endMessage: c.endMessage,
+            startMessageId: c.startMessageId,
+            endMessageId: c.endMessageId,
+            title: c.title,
+            content: c.content,
+        })),
+        ...trailing.map((c, i) => ({
+            sequence: leading.length + compressed.length + i,
+            startMessage: c.startMessage,
+            endMessage: c.endMessage,
+            startMessageId: c.startMessageId,
+            endMessageId: c.endMessageId,
+            title: c.title,
+            content: c.content,
+        })),
+    ];
+
+    replaceAllCompartmentState(
+        db,
+        sessionId,
+        allCompartments,
+        facts.map((f) => ({ category: f.category, content: f.content })),
+    );
+    // Do NOT call clearInjectionCache here. See runCompressionPassIfNeeded call
+    // sites — background compressor must not bust cache. Next cache-busting
+    // pass (isCacheBusting=true) picks up the new state from DB.
+    incrementCompressionDepth(db, sessionId, originalStart, originalEnd);
+
+    sessionLog(sessionId, `compressor: completed ${logLabel}`);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// LLM compressor pass.
+// ---------------------------------------------------------------------------
 
 interface CompressorPassArgs {
     client: PluginContext["client"];
@@ -310,7 +546,9 @@ interface CompressorPassArgs {
     compartments: Compartment[];
     currentTokens: number;
     targetTokens: number;
-    averageDepth: number;
+    /** Target output compartment count (passed to prompt to guide LLM). */
+    outputCount: number;
+    outputDepth: number;
     historianTimeoutMs?: number;
 }
 
@@ -329,19 +567,23 @@ async function runCompressorPass(args: CompressorPassArgs): Promise<Array<{
         compartments,
         currentTokens,
         targetTokens,
-        averageDepth,
+        outputCount,
+        outputDepth,
         historianTimeoutMs,
     } = args;
 
-    const prompt = buildCompressorPrompt(compartments, currentTokens, targetTokens, averageDepth);
+    const prompt = buildCompressorPrompt(
+        compartments,
+        currentTokens,
+        targetTokens,
+        outputDepth,
+        outputCount,
+    );
 
     let agentSessionId: string | null = null;
     try {
         const createResponse = await client.session.create({
-            body: {
-                parentID: sessionId,
-                title: "magic-context-compressor",
-            },
+            body: { parentID: sessionId, title: "magic-context-compressor" },
             query: { directory },
         });
 
@@ -389,46 +631,26 @@ async function runCompressorPass(args: CompressorPassArgs): Promise<Array<{
             return null;
         }
 
-        // Build a lookup for message IDs from original compartments
-        const messageIdMap = new Map<number, string>();
-        for (const c of compartments) {
-            messageIdMap.set(c.startMessage, c.startMessageId);
-            messageIdMap.set(c.endMessage, c.endMessageId);
-        }
-
-        // Map parsed compartments to stored format with message IDs
-        const mapped = parsed.compartments.map((pc) => {
-            const startId = messageIdMap.get(pc.startMessage) ?? "";
-            const endId = messageIdMap.get(pc.endMessage) ?? "";
-            if (!startId || !endId) {
-                sessionLog(
-                    sessionId,
-                    `compressor: messageId miss for ordinals ${pc.startMessage}→${pc.endMessage} (startId=${startId || "MISSING"}, endId=${endId || "MISSING"})`,
-                );
-            }
-            return {
-                startMessage: pc.startMessage,
-                endMessage: pc.endMessage,
-                startMessageId: startId,
-                endMessageId: endId,
-                title: pc.title,
-                content: pc.content,
-            };
-        });
-
-        // Reject if any compartment has empty messageIds — the compressor introduced
-        // boundaries we can't anchor. Empty interior IDs cause silent data degradation,
-        // and an empty final endMessageId breaks visible-prefix trimming.
-        const hasEmptyIds = mapped.some((c) => !c.startMessageId || !c.endMessageId);
-        if (hasEmptyIds) {
+        // Snap LLM's ordinal boundaries to the enclosing input compartment boundaries.
+        // LLMs drift by ±1-2 ordinals when merging; rejecting on exact-match is too strict.
+        // Interpret LLM output as "I merged these compartments together" and snap the
+        // reported start/end ordinals to the boundaries of whichever input compartment
+        // contains them. Contiguity/coverage validation still runs after the snap.
+        const snapped = snapLLMOutputToInputBoundaries(parsed.compartments, compartments);
+        if (!snapped) {
             sessionLog(
                 sessionId,
-                "compressor: rejecting — one or more compartments have empty messageIds",
+                "compressor: rejecting — LLM output contains ordinal(s) outside input range",
             );
             return null;
         }
-
-        return mapped;
+        if (snapped.snapCount > 0) {
+            sessionLog(
+                sessionId,
+                `compressor: snapped ${snapped.snapCount} LLM boundary value(s) to input compartment boundaries`,
+            );
+        }
+        return snapped.result;
     } catch (error: unknown) {
         sessionLog(sessionId, "compressor: historian call failed:", getErrorMessage(error));
         return null;

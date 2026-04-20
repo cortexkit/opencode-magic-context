@@ -62,6 +62,14 @@ describe("MagicContextConfigSchema", () => {
                     min_clusters: 3,
                 },
                 compaction_markers: true,
+                compressor: {
+                    enabled: true,
+                    min_compartment_ratio: 1000,
+                    max_merge_depth: 5,
+                    cooldown_ms: 600_000,
+                    max_compartments_per_pass: 15,
+                    grace_compartments: 10,
+                },
                 experimental: {
                     user_memories: {
                         enabled: false,

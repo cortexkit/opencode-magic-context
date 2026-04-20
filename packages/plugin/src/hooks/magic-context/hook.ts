@@ -81,6 +81,12 @@ export interface MagicContextDeps {
         dreamer?: DreamerConfig;
         commit_cluster_trigger?: { enabled: boolean; min_clusters: number };
         compaction_markers?: boolean;
+        compressor?: {
+            enabled: boolean;
+            min_compartment_ratio: number;
+            max_merge_depth: number;
+            cooldown_ms: number;
+        };
         experimental?: {
             user_memories?: { enabled: boolean; promotion_threshold: number };
             pin_key_files?: { enabled: boolean; token_budget: number; min_reads: number };
@@ -229,6 +235,18 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         experimentalCompactionMarkers: deps.config.compaction_markers,
         experimentalUserMemories: deps.config.experimental?.user_memories?.enabled,
         historianTwoPass: deps.config.historian?.two_pass === true,
+        compressorMinCompartmentRatio:
+            deps.config.compressor?.enabled === false
+                ? undefined
+                : deps.config.compressor?.min_compartment_ratio,
+        compressorMaxMergeDepth:
+            deps.config.compressor?.enabled === false
+                ? undefined
+                : deps.config.compressor?.max_merge_depth,
+        compressorCooldownMs:
+            deps.config.compressor?.enabled === false
+                ? undefined
+                : deps.config.compressor?.cooldown_ms,
         liveModelBySession,
     });
     const eventHandler = createEventHandler({

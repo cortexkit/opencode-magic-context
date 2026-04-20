@@ -168,6 +168,13 @@ export interface TransformDeps {
     /** When true, run a second editor pass after historian to clean U: lines.
      *  Enables the historian-editor agent. Controlled by `historian.two_pass` config. */
     historianTwoPass?: boolean;
+    /** Compressor floor ratio: floor = ceil(lastEndMessage / minCompartmentRatio).
+     *  Controlled by `compressor.min_compartment_ratio` config. */
+    compressorMinCompartmentRatio?: number;
+    /** Compressor max merge depth (1-5). Controlled by `compressor.max_merge_depth` config. */
+    compressorMaxMergeDepth?: number;
+    /** Compressor cooldown in milliseconds. Controlled by `compressor.cooldown_ms` config. */
+    compressorCooldownMs?: number;
     liveModelBySession?: LiveModelBySession;
 }
 
@@ -353,6 +360,8 @@ export function createTransform(deps: TransformDeps) {
                 experimentalCompactionMarkers: deps.experimentalCompactionMarkers,
                 experimentalUserMemories: deps.experimentalUserMemories,
                 historianTwoPass: deps.historianTwoPass,
+                compressorMinCompartmentRatio: deps.compressorMinCompartmentRatio,
+                compressorMaxMergeDepth: deps.compressorMaxMergeDepth,
             });
             skipCompartmentAwaitForThisPass = true;
             return true;
@@ -600,6 +609,9 @@ export function createTransform(deps: TransformDeps) {
             experimentalCompactionMarkers: deps.experimentalCompactionMarkers,
             experimentalUserMemories: deps.experimentalUserMemories,
             historianTwoPass: deps.historianTwoPass,
+            compressorMinCompartmentRatio: deps.compressorMinCompartmentRatio,
+            compressorMaxMergeDepth: deps.compressorMaxMergeDepth,
+            compressorCooldownMs: deps.compressorCooldownMs,
         });
         pendingCompartmentInjection = compartmentPhase.pendingCompartmentInjection;
         const awaitedCompartmentRun = compartmentPhase.awaitedCompartmentRun;

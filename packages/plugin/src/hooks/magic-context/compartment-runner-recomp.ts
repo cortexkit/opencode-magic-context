@@ -314,6 +314,8 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
                 directory: sessionDirectory,
                 historyBudgetTokens: deps.historyBudgetTokens,
                 historianTimeoutMs,
+                minCompartmentRatio: deps.compressorMinCompartmentRatio,
+                maxMergeDepth: deps.compressorMaxMergeDepth,
             });
         }
 

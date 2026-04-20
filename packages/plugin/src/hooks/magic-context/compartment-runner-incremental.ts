@@ -225,6 +225,8 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
                 directory: sessionDirectory,
                 historyBudgetTokens: deps.historyBudgetTokens,
                 historianTimeoutMs,
+                minCompartmentRatio: deps.compressorMinCompartmentRatio,
+                maxMergeDepth: deps.compressorMaxMergeDepth,
             });
             // No marker update needed after compression — marker uses static placeholder text.
             // Compressor changes compartment content but not the boundary ordinal.
