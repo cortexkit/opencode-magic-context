@@ -465,8 +465,25 @@ export function createTransform(deps: TransformDeps) {
         let batch: { finalize: () => void } | null = null;
         let hasRecentReduceCall = false;
         // Inject temporal markers before tagging so the §N§ tag prefix wraps
-        // around our marker. Idempotent and stable — gap values derive from
-        // immutable message.time.created / time.completed.
+        // around our marker.
+        //
+        // Intentional — this runs on EVERY transform pass, including defer /
+        // cache-safe passes that are otherwise gated. Three invariants make
+        // that safe:
+        //   1. Idempotent: injectTemporalMarkers detects existing markers by
+        //      regex and will not double-prefix.
+        //   2. Deterministic: the marker value derives from immutable
+        //      message.time.created / time.completed timestamps — same input,
+        //      same output, every pass.
+        //   3. Required every pass: OpenCode rebuilds the messages array from
+        //      its DB for every transform, so markers must be re-applied on
+        //      each pass or they would disappear on defer passes. Skipping
+        //      defer passes here would cause the marker to flicker in/out and
+        //      bust cache when it reappeared.
+        //
+        // The retroactive-on-flag-flip behavior is the same mechanism — when
+        // the flag turns on, the first pass marks every eligible user message
+        // and subsequent passes just observe the already-marked content.
         if (deps.experimentalTemporalAwareness) {
             const tTemporal = performance.now();
             const injected = injectTemporalMarkers(messages);

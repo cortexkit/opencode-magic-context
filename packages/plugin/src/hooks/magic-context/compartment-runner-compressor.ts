@@ -298,7 +298,7 @@ interface SelectionConstraints {
  *   merge reduces count by (input - output), so limiting picks to floorHeadroom
  *   guarantees we can't fall below floor even in the worst case (output = 1).
  */
-function findOldestContiguousSameDepthBand(
+export function findOldestContiguousSameDepthBand(
     scored: ScoredCompartment[],
     constraints: SelectionConstraints,
 ): ScoredCompartment[] {
@@ -332,8 +332,17 @@ function findOldestContiguousSameDepthBand(
         if (runLen >= 2) {
             return scored.slice(i, j);
         }
-        // No viable run starting at i. Skip past the broken element to find the next candidate.
-        i = Math.max(j + 1, i + 1);
+        // No viable run starting at i. Resume scanning AT j, not past it — j is
+        // the boundary where the inner loop broke, which means scored[j] has a
+        // different depth from scored[i] but may itself anchor a new run with
+        // scored[j+1], scored[j+2], etc. Jumping to j+1 would skip scored[j]
+        // and miss the band [scored[j], scored[j+1], ...].
+        //
+        // Progress is still guaranteed: `i+1` ensures we never stall on the
+        // same index when the inner loop didn't advance (e.g. c was at max
+        // depth and got `continue`-d above, or hardMaxPick=2 stops at j=i+1
+        // and we need to move to j — which is i+1 — anyway).
+        i = Math.max(j, i + 1);
     }
 
     return [];

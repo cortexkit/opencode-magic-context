@@ -5,6 +5,7 @@ import {
     replaceAllCompartmentState,
     saveRecompStagingPass,
 } from "../../features/magic-context/compartment-storage";
+import { clearCompressionDepth } from "../../features/magic-context/compression-depth-storage";
 import { promoteSessionFactsToMemory } from "../../features/magic-context/memory";
 import { resolveProjectIdentity } from "../../features/magic-context/memory/project-identity";
 import { getMemoriesByProject } from "../../features/magic-context/memory/storage-memory";
@@ -102,6 +103,13 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
 
             const promoted = promoteRecompStaging(db, sessionId);
             if (!promoted) return null;
+
+            // Full recomp rebuilds every compartment from message 1 onward, so
+            // all pre-existing compression-depth rows are stale — the compressor
+            // would otherwise skip or wrongly tier the fresh compartments. Wipe
+            // per-session depth state so the rebuilt compartments start at depth
+            // 0, matching what partial recomp does for its rebuilt range.
+            clearCompressionDepth(db, sessionId);
 
             // Invalidate injection cache after recomp promotion
             clearInjectionCache(sessionId);
@@ -284,6 +292,9 @@ export async function executeContextRecompInternal(deps: CompartmentRunnerDeps):
             replaceAllCompartmentState(db, sessionId, candidateCompartments, candidateFacts);
             clearRecompStaging(db, sessionId);
         }
+        // Full recomp rebuilds every compartment, so all pre-existing depth
+        // rows are stale. Matches partial recomp's behavior for rebuilt ranges.
+        clearCompressionDepth(db, sessionId);
         // Invalidate injection cache after final recomp promotion
         clearInjectionCache(sessionId);
 

@@ -99,6 +99,31 @@ function mergeConfigs(
     return config;
 }
 
+/**
+ * Render a config value for a warning message in a way that never leaks resolved
+ * secrets from `{env:API_KEY}` / `{file:...}` substitution.
+ *
+ * Strings, numbers, booleans, and nulls are shown as type-plus-length so the
+ * user can still diagnose the problem ("string, 48 chars", "number 200001") but
+ * never see the resolved content. Objects and arrays are shown as their
+ * structural shape only. `undefined` / missing values are reported as
+ * `<missing>`.
+ */
+function redactConfigValue(value: unknown): string {
+    if (value === undefined) return "<missing>";
+    if (value === null) return "null";
+    if (typeof value === "string")
+        return `string, ${value.length} char${value.length === 1 ? "" : "s"}`;
+    if (typeof value === "number") return `number ${value}`;
+    if (typeof value === "boolean") return `boolean ${value}`;
+    if (Array.isArray(value)) return `array, ${value.length} item${value.length === 1 ? "" : "s"}`;
+    if (typeof value === "object") {
+        const keys = Object.keys(value as Record<string, unknown>);
+        return `object with keys [${keys.join(", ")}]`;
+    }
+    return typeof value;
+}
+
 function parsePluginConfig(
     rawConfig: Record<string, unknown>,
 ): MagicContextPluginConfig & { configWarnings?: string[] } {
@@ -145,11 +170,14 @@ function parsePluginConfig(
                 `"${key}": invalid agent configuration, ignoring. Check your magic-context.jsonc.`,
             );
         } else {
-            // Use Zod default for this field
+            // Use Zod default for this field.
+            // Intentional: redactConfigValue reports type+length, never the
+            // resolved value itself, because `{env:...}` / `{file:...}`
+            // substitution may have already expanded secrets into rawConfig.
             delete patched[key];
             const defaultVal = (defaults as unknown as Record<string, unknown>)[key];
             warnings.push(
-                `"${key}": invalid value ${JSON.stringify(rawConfig[key])}, using default ${JSON.stringify(defaultVal)}.`,
+                `"${key}": invalid value (${redactConfigValue(rawConfig[key])}), using default ${JSON.stringify(defaultVal)}.`,
             );
         }
     }

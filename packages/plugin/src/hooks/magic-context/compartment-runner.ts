@@ -14,6 +14,32 @@ export function getActiveCompartmentRun(sessionId: string): Promise<void> | unde
     return activeRuns.get(sessionId);
 }
 
+/**
+ * Register a compartment-state-mutating promise with the active-runs map.
+ *
+ * Use this to serialize background compressor runs against historian/recomp
+ * runs: both read-modify-write compartment rows, and while SQLite serializes
+ * individual statements it does NOT serialize multi-step update cycles. If a
+ * historian starts while a background compressor is still running, either
+ * side's final write can overwrite the other's work.
+ *
+ * The registered promise is cleared from activeRuns on settle so later passes
+ * can start a new run. If a run is already registered for the session, the
+ * caller is expected to have checked getActiveCompartmentRun() first and
+ * bailed — this function will overwrite silently if called anyway, which is
+ * the desired behavior for the retry path.
+ */
+export function registerActiveCompartmentRun(sessionId: string, promise: Promise<void>): void {
+    const wrapped = promise.finally(() => {
+        // Only clear if this is still the current entry (another run may have
+        // replaced us if the caller overwrote; don't stomp the replacement).
+        if (activeRuns.get(sessionId) === wrapped) {
+            activeRuns.delete(sessionId);
+        }
+    });
+    activeRuns.set(sessionId, wrapped);
+}
+
 export function startCompartmentAgent(deps: CompartmentRunnerDeps): void {
     // Intentional: this check-then-set is safe in Bun's single-threaded event loop.
     // The synchronous code between activeRuns.get() and activeRuns.set() cannot interleave,

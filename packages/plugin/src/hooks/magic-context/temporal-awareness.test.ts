@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-    TEMPORAL_AWARENESS_THRESHOLD_SECONDS,
-    TEMPORAL_MARKER_PATTERN,
     effectiveEndMs,
     formatDate,
     formatGap,
     injectTemporalMarkers,
+    TEMPORAL_AWARENESS_THRESHOLD_SECONDS,
+    TEMPORAL_MARKER_PATTERN,
     temporalMarkerPrefix,
 } from "./temporal-awareness";
 
@@ -18,7 +18,10 @@ function makeUserMsg(createdMs: number, text: string) {
 }
 
 function makeAssistantMsg(createdMs: number, completedMs: number | undefined, text: string) {
-    const time = completedMs !== undefined ? { created: createdMs, completed: completedMs } : { created: createdMs };
+    const time =
+        completedMs !== undefined
+            ? { created: createdMs, completed: completedMs }
+            : { created: createdMs };
     return {
         info: { role: "assistant", time },
         parts: [{ type: "text", text }],
@@ -89,9 +92,7 @@ describe("temporalMarkerPrefix", () => {
     test("returns full HTML comment line for above-threshold gaps", () => {
         expect(temporalMarkerPrefix(301)).toBe("<!-- +5m -->\n");
         expect(temporalMarkerPrefix(60 * 60 + 15 * 60)).toBe("<!-- +1h 15m -->\n");
-        expect(temporalMarkerPrefix(7 * 24 * 60 * 60 + 3 * 24 * 60 * 60)).toBe(
-            "<!-- +1w 3d -->\n",
-        );
+        expect(temporalMarkerPrefix(7 * 24 * 60 * 60 + 3 * 24 * 60 * 60)).toBe("<!-- +1w 3d -->\n");
     });
 
     test("output matches the pattern regex", () => {

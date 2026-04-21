@@ -22,7 +22,12 @@ import {
 import { createTagger } from "../../features/magic-context/tagger";
 import type { PluginContext } from "../../plugin/types";
 import * as shared from "../../shared";
-import { executeContextRecomp, runCompartmentAgent } from "./compartment-runner";
+import {
+    executeContextRecomp,
+    getActiveCompartmentRun,
+    registerActiveCompartmentRun,
+    runCompartmentAgent,
+} from "./compartment-runner";
 import { tagMessages } from "./tag-messages";
 
 const tempDirs: string[] = [];
@@ -1578,5 +1583,84 @@ describe("runCompartmentAgent", () => {
         expect(getIgnoredNotificationTexts(promptSession)[0]).toContain(
             "historian model unavailable",
         );
+    });
+});
+
+describe("registerActiveCompartmentRun", () => {
+    it("surfaces via getActiveCompartmentRun while the promise is pending, and clears itself when it settles", async () => {
+        const sessionId = "ses-register-active";
+        expect(getActiveCompartmentRun(sessionId)).toBeUndefined();
+
+        let resolveCompressor: (() => void) | undefined;
+        const pending = new Promise<void>((resolve) => {
+            resolveCompressor = resolve;
+        });
+
+        registerActiveCompartmentRun(sessionId, pending);
+
+        // While the compressor is still running, a later historian-start check
+        // must see the active run and know to bail out. This is the whole
+        // point of the race fix — without registration, historian could start
+        // on top of the compressor and both would write compartments.
+        expect(getActiveCompartmentRun(sessionId)).toBeDefined();
+
+        resolveCompressor?.();
+        await pending;
+        // Give the .finally() callback a tick to run.
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(getActiveCompartmentRun(sessionId)).toBeUndefined();
+    });
+
+    it("clears itself when the underlying promise settles (including swallowed failures)", async () => {
+        // Real callers attach their own .catch before handing the promise in
+        // (see transform-compartment-phase.ts: the compressor path ends its
+        // .catch by logging, then registerActiveCompartmentRun receives that
+        // already-resolved-to-undefined promise). So the active-runs map never
+        // sees an unhandled rejection; it just needs to clear on settle.
+        const sessionId = "ses-register-active-reject";
+        let rejectCompressor: ((err: unknown) => void) | undefined;
+        const pending = new Promise<void>((_, reject) => {
+            rejectCompressor = reject;
+        }).catch(() => {
+            // Simulate the caller-side swallow (matches real compressor dispatch).
+        });
+
+        registerActiveCompartmentRun(sessionId, pending);
+        expect(getActiveCompartmentRun(sessionId)).toBeDefined();
+
+        rejectCompressor?.(new Error("simulated compressor failure"));
+        await getActiveCompartmentRun(sessionId);
+        await new Promise((r) => setTimeout(r, 0));
+
+        expect(getActiveCompartmentRun(sessionId)).toBeUndefined();
+    });
+
+    it("does not delete a replacement run when the original settles", async () => {
+        // Edge case: if two registrations happen back-to-back (which
+        // shouldn't normally occur — caller is expected to check first —
+        // but defensive behavior matters), the second registration must
+        // survive after the first one settles.
+        const sessionId = "ses-register-active-replace";
+
+        let resolveFirst: (() => void) | undefined;
+        const first = new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+        });
+        registerActiveCompartmentRun(sessionId, first);
+
+        const second = new Promise<void>((resolve) => {
+            // Never resolve during test
+            void resolve;
+        });
+        registerActiveCompartmentRun(sessionId, second);
+
+        resolveFirst?.();
+        await first;
+        await new Promise((r) => setTimeout(r, 0));
+
+        // The second registration must still be surfaced — the first's
+        // finally must not have stomped it.
+        expect(getActiveCompartmentRun(sessionId)).toBeDefined();
     });
 });

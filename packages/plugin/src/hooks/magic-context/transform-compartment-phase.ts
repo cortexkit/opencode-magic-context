@@ -4,7 +4,11 @@ import { type ContextDatabase, updateSessionMeta } from "../../features/magic-co
 import type { PluginContext } from "../../plugin/types";
 import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
-import { getActiveCompartmentRun, startCompartmentAgent } from "./compartment-runner";
+import {
+    getActiveCompartmentRun,
+    registerActiveCompartmentRun,
+    startCompartmentAgent,
+} from "./compartment-runner";
 import { runCompressionPassIfNeeded } from "./compartment-runner-compressor";
 import { BLOCK_UNTIL_DONE_PERCENTAGE } from "./compartment-trigger";
 import {
@@ -272,9 +276,13 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
             args.compressorCooldownMs ?? DEFAULT_COMPRESSOR_COOLDOWN_MS,
         )
     ) {
-        // Fire-and-forget: compressor runs in background, results land on next bust pass
+        // Fire-and-forget: compressor runs in background, results land on next
+        // cache-busting pass. Register the promise with activeRuns so a later
+        // pass that wants to start a historian sees it via
+        // getActiveCompartmentRun() and skips starting, preventing concurrent
+        // writes to compartments/session_facts tables.
         markCompressorRun(args.sessionId);
-        void runCompressionPassIfNeeded({
+        const compressorPromise = runCompressionPassIfNeeded({
             client: args.client,
             db: args.db,
             sessionId: args.sessionId,
@@ -299,6 +307,7 @@ export async function runCompartmentPhase(args: RunCompartmentPhaseArgs): Promis
                     getErrorMessage(error),
                 );
             });
+        registerActiveCompartmentRun(args.sessionId, compressorPromise);
     }
 
     return { pendingCompartmentInjection, awaitedCompartmentRun, compartmentInProgress };
