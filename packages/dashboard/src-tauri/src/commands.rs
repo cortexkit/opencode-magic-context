@@ -73,6 +73,27 @@ pub fn delete_memory(state: State<'_, AppState>, memory_id: i64) -> Result<(), S
     db::delete_memory(&conn, memory_id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn bulk_update_memory_status(
+    state: State<'_, AppState>,
+    memory_ids: Vec<i64>,
+    status: String,
+) -> Result<usize, String> {
+    let path = state.get_db_path()?;
+    let mut conn = db::open_readwrite(&path).map_err(|e| e.to_string())?;
+    db::bulk_update_memory_status(&mut conn, &memory_ids, &status).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn bulk_delete_memory(
+    state: State<'_, AppState>,
+    memory_ids: Vec<i64>,
+) -> Result<usize, String> {
+    let path = state.get_db_path()?;
+    let mut conn = db::open_readwrite(&path).map_err(|e| e.to_string())?;
+    db::bulk_delete_memory(&mut conn, &memory_ids).map_err(|e| e.to_string())
+}
+
 // ── Session commands ────────────────────────────────────────
 
 #[tauri::command]

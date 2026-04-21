@@ -1281,6 +1281,81 @@ pub fn delete_memory(conn: &Connection, memory_id: i64) -> Result<(), rusqlite::
     Ok(())
 }
 
+/// Bulk-update status for a set of memory IDs in one transaction.
+///
+/// We assemble an `IN (?,?,...)` clause dynamically because rusqlite has no
+/// first-class array binding. IDs are integers so SQL-injection is not a
+/// concern; each ID is still bound as a parameter.
+///
+/// Empty input is a no-op and returns 0 (affected rows).
+pub fn bulk_update_memory_status(
+    conn: &mut Connection,
+    memory_ids: &[i64],
+    new_status: &str,
+) -> Result<usize, rusqlite::Error> {
+    if memory_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let placeholders = memory_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "UPDATE memories SET status = ?1, updated_at = ?2 WHERE id IN ({})",
+        placeholders,
+    );
+
+    let tx = conn.transaction()?;
+    let affected = {
+        let mut stmt = tx.prepare(&sql)?;
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(2 + memory_ids.len());
+        params.push(&new_status as &dyn rusqlite::ToSql);
+        params.push(&now as &dyn rusqlite::ToSql);
+        for id in memory_ids {
+            params.push(id as &dyn rusqlite::ToSql);
+        }
+        stmt.execute(&params[..])?
+    };
+    tx.commit()?;
+    Ok(affected)
+}
+
+/// Bulk-delete memories and their embeddings in one transaction.
+///
+/// Deletes from `memory_embeddings` first, then `memories`. Though
+/// `memory_embeddings.memory_id` has a foreign key, we don't rely on
+/// cascade delete here — explicit delete keeps the intent readable and
+/// matches what single `delete_memory` implicitly gets via the FK.
+pub fn bulk_delete_memory(
+    conn: &mut Connection,
+    memory_ids: &[i64],
+) -> Result<usize, rusqlite::Error> {
+    if memory_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let placeholders = memory_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+    let tx = conn.transaction()?;
+    // Explicitly clear embeddings first; the FK would handle this too but
+    // being explicit documents the intent and matches single-row delete logs.
+    {
+        let sql = format!("DELETE FROM memory_embeddings WHERE memory_id IN ({})", placeholders);
+        let mut stmt = tx.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            memory_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        stmt.execute(&params[..])?;
+    }
+    let affected = {
+        let sql = format!("DELETE FROM memories WHERE id IN ({})", placeholders);
+        let mut stmt = tx.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> =
+            memory_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        stmt.execute(&params[..])?
+    };
+    tx.commit()?;
+    Ok(affected)
+}
+
 // ── Session queries ─────────────────────────────────────────
 
 pub fn get_sessions(conn: &Connection) -> Result<Vec<SessionSummary>, rusqlite::Error> {

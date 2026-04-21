@@ -34,6 +34,8 @@ fn main() {
             commands::update_memory_status,
             commands::update_memory_content,
             commands::delete_memory,
+            commands::bulk_update_memory_status,
+            commands::bulk_delete_memory,
             // Sessions
             commands::get_sessions,
             commands::get_compartments,

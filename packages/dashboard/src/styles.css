@@ -336,16 +336,230 @@ body {
   letter-spacing: 0.05em;
 }
 
-.category-header::after {
-  content: '';
+/* When category-header is a <button> (clickable), reset native button styles
+   so it looks identical to the plain div variant. */
+.category-header.clickable {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  /* Preserve the original typography from the div variant */
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.category-header.clickable:hover {
+  color: var(--text-primary);
+}
+
+.category-header.clickable:hover .category-divider {
+  background: var(--border-light);
+}
+
+/* Divider fills remaining horizontal space between label and chevron.
+   Replaces the pseudo-::after approach used before clickable variant. */
+.category-divider {
   flex: 1;
   height: 1px;
   background: var(--border);
+  transition: background var(--transition-fast);
+}
+
+.category-chevron {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.category-chevron.collapsed {
+  transform: rotate(-90deg);
 }
 
 .category-count {
   color: var(--text-muted);
   font-weight: 400;
+}
+
+/* ── Memory card with checkbox column ─────────────────── */
+.memory-card {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.memory-card.selected {
+  background: var(--bg-active);
+  border-color: var(--accent);
+}
+
+.memory-card-checkbox {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 2px;
+  /* Give the checkbox enough hit-target without visually bulking up the row */
+  min-width: 18px;
+}
+
+.memory-card-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ── Multi-select bulk action bar ─────────────────────── */
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 20px;
+  margin: 0 0 8px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.bulk-action-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+
+.bulk-action-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bulk-action-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bulk-action-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+}
+
+.bulk-action-link:hover {
+  color: var(--accent-dim);
+  text-decoration: underline;
+}
+
+/* Danger variant for destructive actions in the bulk bar. */
+.btn.danger {
+  background: var(--red-dim);
+  color: #fff;
+  border-color: var(--red);
+}
+
+.btn.danger:hover {
+  background: var(--red);
+}
+
+/* Ghost variant for tertiary actions (clear selection). */
+.btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+
+.btn.ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* ── Memory controls (expand/collapse all) ────────────── */
+.memory-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 20px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ── Tri-state checkbox ──────────────────────────────── */
+/* Native checkbox styled to match dark theme. Indeterminate state is set
+   imperatively via ref in JS — CSS alone can't style it reliably across
+   all browsers. */
+.tri-checkbox,
+.memory-card-checkbox input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tri-checkbox:hover,
+.memory-card-checkbox input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+.tri-checkbox:checked,
+.memory-card-checkbox input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.tri-checkbox:checked::after,
+.memory-card-checkbox input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 3px;
+  height: 7px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Indeterminate (tri-state "some") — JS sets .indeterminate on the element */
+.tri-checkbox:indeterminate {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.tri-checkbox:indeterminate::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 2px;
+  width: 8px;
+  height: 2px;
+  background: #fff;
+  border-radius: 1px;
 }
 
 /* ── Tab pills ───────────────────────────────────────── */

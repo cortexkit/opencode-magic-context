@@ -66,6 +66,17 @@ export async function deleteMemory(memoryId: number): Promise<void> {
   return invoke("delete_memory", { memoryId });
 }
 
+export async function bulkUpdateMemoryStatus(
+  memoryIds: number[],
+  status: string
+): Promise<number> {
+  return invoke("bulk_update_memory_status", { memoryIds, status });
+}
+
+export async function bulkDeleteMemory(memoryIds: number[]): Promise<number> {
+  return invoke("bulk_delete_memory", { memoryIds });
+}
+
 // ── Session API ─────────────────────────────────────────────
 
 export async function getSessions(): Promise<SessionSummary[]> {
