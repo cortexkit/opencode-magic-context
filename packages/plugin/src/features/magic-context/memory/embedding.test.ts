@@ -116,15 +116,7 @@ describe("embedding module", () => {
                      (project_path, category, content, normalized_hash, source_session_id,
                       seen_count, first_seen_at, created_at, updated_at, last_seen_at, status)
                      VALUES (?, 'TEST', ?, ?, 'ses-test', 1, ?, ?, ?, ?, 'active')`,
-                ).run(
-                    row.projectPath,
-                    row.content,
-                    `hash-${i}`,
-                    now,
-                    now,
-                    row.updatedAt,
-                    now,
-                );
+                ).run(row.projectPath, row.content, `hash-${i}`, now, now, row.updatedAt, now);
             }
         }
 
