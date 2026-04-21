@@ -23,6 +23,7 @@ tmp/
 
 .sisyphus/
 .opencode/
+.claude/
 local-ignore/
 .planning/
 
