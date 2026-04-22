@@ -333,6 +333,31 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
     // for good measure (belt and suspenders — failures here are non-fatal).
     healNullTextColumns(db);
     healNullIntegerColumns(db);
+    healMissingMemoryBlockIds(db);
+}
+
+/**
+ * One-shot heal for sessions upgraded from a build without memory_block_ids.
+ *
+ * Those sessions have a populated memory_block_cache but no ids — ctx_search's
+ * visible-memory filter then silently no-ops. Clearing the cache forces the
+ * next transform pass to regenerate BOTH cache + ids in one UPDATE. The
+ * regenerated block is byte-identical (renderMemoryBlock is deterministic
+ * over the same memory set in stable id order), so this does NOT cause an
+ * Anthropic prompt-cache bust.
+ *
+ * Best-effort — wrapped because the columns may not exist on a brand-new DB
+ * that hasn't finished ensureColumn yet.
+ */
+function healMissingMemoryBlockIds(db: Database): void {
+    try {
+        db.prepare(
+            "UPDATE session_meta SET memory_block_cache = '' WHERE memory_block_cache != '' AND (memory_block_ids IS NULL OR memory_block_ids = '') AND memory_block_count > 0",
+        ).run();
+    } catch {
+        // Column missing on very fresh DBs — next startup reruns this after
+        // ensureColumn adds the column.
+    }
 }
 
 function healNullTextColumns(db: Database): void {
