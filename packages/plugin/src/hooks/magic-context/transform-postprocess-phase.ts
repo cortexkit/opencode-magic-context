@@ -13,6 +13,7 @@ import type { SessionMeta, TagEntry } from "../../features/magic-context/types";
 import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
 import { applyContextNudge } from "./apply-context-nudge";
+import { runAutoSearchHint } from "./auto-search-runner";
 import { getActiveCompartmentRun } from "./compartment-runner";
 import { dropStaleReduceCalls } from "./drop-stale-reduce-calls";
 import { applyHeuristicCleanup } from "./heuristic-cleanup";
@@ -89,9 +90,19 @@ interface RunPostTransformPhaseArgs {
     forceMaterializationPercentage: number;
     hasRecentReduceCall: boolean;
     projectPath?: string;
+    /** Experimental auto-search: when enabled, runs ctx_search on the latest
+     *  user prompt and appends a compact fragment hint. */
+    autoSearch?: {
+        enabled: boolean;
+        scoreThreshold: number;
+        minPromptChars: number;
+        memoryEnabled: boolean;
+        embeddingEnabled: boolean;
+        gitCommitsEnabled: boolean;
+    };
 }
 
-export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
+export async function runPostTransformPhase(args: RunPostTransformPhaseArgs): Promise<void> {
     let didMutateFromPendingOperations = false;
     const isExplicitFlush = args.flushedSessions.has(args.sessionId);
     const alreadyRanThisTurn =
@@ -560,5 +571,34 @@ export function runPostTransformPhase(args: RunPostTransformPhaseArgs): void {
         // If no user message exists, the nudge is lost for this cycle, but
         // triggerPending must still clear to prevent firing on every subsequent pass.
         markNoteNudgeDelivered(args.db, args.sessionId, noteInstruction, anchoredMessageId);
+    }
+
+    // Auto-search hint — append a vague-recall fragment hint to the latest
+    // user message when experimental.auto_search is enabled and search
+    // returns a high-confidence match. Runs OUTSIDE fullFeatureMode because
+    // appending to the user's own turn is cache-safe (user message hasn't
+    // been cached yet) and useful across subagent sessions too.
+    if (args.autoSearch?.enabled && args.projectPath) {
+        try {
+            await runAutoSearchHint({
+                sessionId: args.sessionId,
+                db: args.db,
+                messages: args.messages,
+                options: {
+                    enabled: true,
+                    scoreThreshold: args.autoSearch.scoreThreshold,
+                    minPromptChars: args.autoSearch.minPromptChars,
+                    projectPath: args.projectPath,
+                    memoryEnabled: args.autoSearch.memoryEnabled,
+                    embeddingEnabled: args.autoSearch.embeddingEnabled,
+                    gitCommitsEnabled: args.autoSearch.gitCommitsEnabled,
+                    // Future: pass memory ids already rendered in <session-history>
+                    // so the hint doesn't duplicate. For now the agent sees the
+                    // full set and can decide.
+                },
+            });
+        } catch (error) {
+            sessionLog(args.sessionId, "auto-search runner failed:", error);
+        }
     }
 }

@@ -181,6 +181,18 @@ export interface TransformDeps {
     /** Compressor cooldown in milliseconds. Controlled by `compressor.cooldown_ms` config. */
     compressorCooldownMs?: number;
     liveModelBySession?: LiveModelBySession;
+    /** Experimental auto-search hint — transform-time ctx_search on each new
+     *  user message; when top hit clears the threshold, append a compact
+     *  fragment hint to the user message. Controlled by
+     *  `experimental.auto_search.*` config. */
+    autoSearch?: {
+        enabled: boolean;
+        scoreThreshold: number;
+        minPromptChars: number;
+        memoryEnabled: boolean;
+        embeddingEnabled: boolean;
+        gitCommitsEnabled: boolean;
+    };
 }
 
 export function createTransform(deps: TransformDeps) {
@@ -657,7 +669,7 @@ export function createTransform(deps: TransformDeps) {
         logTransformTiming(sessionId, "compartmentPhase", tCompartmentPhase);
 
         const tPostProcess = performance.now();
-        runPostTransformPhase({
+        await runPostTransformPhase({
             sessionId,
             db,
             messages,
@@ -688,6 +700,7 @@ export function createTransform(deps: TransformDeps) {
             forceMaterializationPercentage: FORCE_MATERIALIZE_PERCENTAGE,
             hasRecentReduceCall,
             projectPath: deps.projectPath,
+            autoSearch: deps.autoSearch,
         });
         logTransformTiming(sessionId, "postTransformPhase", tPostProcess);
 

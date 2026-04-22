@@ -16,6 +16,20 @@ function normalizeLimit(limit?: number): number {
     return Math.max(1, Math.floor(limit));
 }
 
+function formatAge(committedAtMs: number): string {
+    const ageMs = Date.now() - committedAtMs;
+    if (ageMs < 0) return "future";
+    const days = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+    if (days <= 0) return "today";
+    if (days === 1) return "1d ago";
+    if (days < 30) return `${days}d ago`;
+    const months = Math.floor(days / 30);
+    if (months === 1) return "1mo ago";
+    if (months < 12) return `${months}mo ago`;
+    const years = Math.floor(days / 365);
+    return years === 1 ? "1y ago" : `${years}y ago`;
+}
+
 function formatResult(result: UnifiedSearchResult, index: number): string {
     if (result.source === "memory") {
         return [
@@ -27,6 +41,13 @@ function formatResult(result: UnifiedSearchResult, index: number): string {
     if (result.source === "fact") {
         return [
             `[${index}] [fact] score=${result.score.toFixed(2)} category=${result.factCategory} id=${result.factId}`,
+            result.content,
+        ].join("\n");
+    }
+
+    if (result.source === "git_commit") {
+        return [
+            `[${index}] [git_commit] score=${result.score.toFixed(2)} sha=${result.shortSha} ${formatAge(result.committedAtMs)} match=${result.matchType}`,
             result.content,
         ].join("\n");
     }
@@ -82,6 +103,7 @@ function createCtxSearchTool(deps: CtxSearchToolDeps): ToolDefinition {
                     embeddingEnabled: deps.embeddingEnabled,
                     readMessages: deps.readMessages,
                     maxMessageOrdinal: lastCompartmentEnd >= 0 ? lastCompartmentEnd : undefined,
+                    gitCommitsEnabled: deps.gitCommitsEnabled ?? false,
                 },
             );
 

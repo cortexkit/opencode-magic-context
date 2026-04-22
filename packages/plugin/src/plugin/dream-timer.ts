@@ -1,6 +1,11 @@
 import type { DreamerConfig, EmbeddingConfig } from "../config/schema/magic-context";
 import { checkScheduleAndEnqueue, processDreamQueue } from "../features/magic-context/dreamer";
+import {
+    embedUnembeddedCommits,
+    indexCommitsForProject,
+} from "../features/magic-context/git-commits";
 import { embedAllUnembeddedMemories } from "../features/magic-context/memory/embedding";
+import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
 import { openDatabase } from "../features/magic-context/storage";
 import { log } from "../shared/logger";
 import type { PluginContext } from "./types";
@@ -31,6 +36,14 @@ export function startDreamScheduleTimer(args: {
         token_budget: number;
         min_reads: number;
     };
+    /** When set, periodically index git commits from `directory` into the
+     *  current project's commit table. Embeddings are drained as part of the
+     *  same tick when embedding is enabled. */
+    gitCommitIndexing?: {
+        enabled: boolean;
+        since_days: number;
+        max_commits: number;
+    };
 }): (() => void) | undefined {
     // Singleton guard — only one timer per process
     if (activeTimer) {
@@ -39,18 +52,28 @@ export function startDreamScheduleTimer(args: {
     }
 
     const {
+        directory,
         client,
         dreamerConfig,
         embeddingConfig,
         memoryEnabled,
         experimentalUserMemories,
         experimentalPinKeyFiles,
+        gitCommitIndexing,
     } = args;
     const dreamingEnabled = Boolean(dreamerConfig?.enabled && dreamerConfig.schedule?.trim());
     const embeddingSweepEnabled = memoryEnabled && embeddingConfig.provider !== "off";
+    const commitIndexingEnabled = gitCommitIndexing?.enabled === true;
 
-    if (!dreamingEnabled && !embeddingSweepEnabled) {
+    if (!dreamingEnabled && !embeddingSweepEnabled && !commitIndexingEnabled) {
         return;
+    }
+
+    // Kick off a startup sweep for git commits so first-time indexing doesn't
+    // wait 15 minutes. Fire-and-forget — any failure is logged and recovered
+    // on the next interval.
+    if (commitIndexingEnabled && gitCommitIndexing) {
+        void sweepGitCommits({ directory, gitCommitIndexing, embeddingConfig });
     }
 
     const timer = setInterval(() => {
@@ -68,6 +91,10 @@ export function startDreamScheduleTimer(args: {
                     .catch((error: unknown) => {
                         log("[magic-context] periodic memory embedding sweep failed:", error);
                     });
+            }
+
+            if (commitIndexingEnabled && gitCommitIndexing) {
+                void sweepGitCommits({ directory, gitCommitIndexing, embeddingConfig });
             }
 
             if (!dreamingEnabled || !dreamerConfig?.schedule?.trim()) {
@@ -115,4 +142,35 @@ export function startDreamScheduleTimer(args: {
     );
 
     return cleanup;
+}
+
+/**
+ * Index commits for the current project and drain embeddings. Runs in the
+ * background under the timer's fire-and-forget contract.
+ *
+ * Project identity resolution happens inside the indexer so we always read
+ * the same `git:<sha>` identity used by memories and ctx_search.
+ */
+async function sweepGitCommits(args: {
+    directory: string;
+    gitCommitIndexing: { enabled: boolean; since_days: number; max_commits: number };
+    embeddingConfig: EmbeddingConfig;
+}): Promise<void> {
+    const { directory, gitCommitIndexing, embeddingConfig } = args;
+    try {
+        const db = openDatabase();
+        const projectPath = resolveProjectIdentity(directory);
+        const result = await indexCommitsForProject(db, projectPath, directory, embeddingConfig, {
+            sinceDays: gitCommitIndexing.since_days,
+            maxCommits: gitCommitIndexing.max_commits,
+        });
+        // Drain any remaining embedding backlog (indexer caps per run).
+        if (embeddingConfig.provider !== "off" && result.embedded > 0) {
+            await embedUnembeddedCommits(db, projectPath, embeddingConfig);
+        }
+    } catch (error) {
+        log(
+            `[git-commits] sweep failed for ${directory}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+    }
 }

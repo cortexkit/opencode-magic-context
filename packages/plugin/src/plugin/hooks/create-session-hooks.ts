@@ -58,6 +58,8 @@ export function createSessionHooks(args: {
                 memory: pluginConfig.memory,
                 sidekick: pluginConfig.sidekick,
                 dreamer: pluginConfig.dreamer,
+                commit_cluster_trigger: pluginConfig.commit_cluster_trigger,
+                compaction_markers: pluginConfig.compaction_markers,
                 compressor: pluginConfig.compressor,
                 experimental: pluginConfig.experimental,
             },

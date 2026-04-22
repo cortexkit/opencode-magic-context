@@ -440,6 +440,65 @@ Lets agents reason correctly about workflow pacing, log durations, build times, 
 
 **Cache safety.** Markers are idempotent by regex detection and derive from static message timestamps — re-running the injector on any transform pass produces the same output, so enabling the flag busts cache once (on the first pass after flip) and then stays stable. Historian input is untouched.
 
+### `experimental.git_commit_indexing`
+
+| Key | Type | Default |
+|-----|------|---------|
+| `experimental.git_commit_indexing.enabled` | `boolean` | `false` |
+| `experimental.git_commit_indexing.since_days` | `number` | `365` |
+| `experimental.git_commit_indexing.max_commits` | `number` | `2000` |
+
+When enabled, Magic Context indexes HEAD git commits (skipping merges) from the project and makes them searchable through `ctx_search`. Commits are embedded using the configured embedding provider, so semantic search surfaces "when did we change the X pattern" or "why did we pick Y over Z" queries.
+
+- **HEAD only, no merges.** Abandoned experiments on feature branches don't pollute search; merged work becomes reachable from HEAD anyway.
+- **Windowed.** Only commits from the last `since_days` days are indexed (default 365). Older commits exit the window and are evicted when the project cap is exceeded.
+- **Project-scoped.** Commits are stored per project identity (git root commit) so worktrees and clones share the same index.
+- **Capped per project.** `max_commits` is a hard upper bound (default 2000). Oldest commits are evicted first when the cap is exceeded.
+- **Non-blocking.** Initial sweep runs at startup; incremental tick runs every 15 minutes from the dream timer. The sweep skips already-indexed SHAs.
+- **ctx_search integration.** Results appear as a `git_commit` source alongside `memory`, `session_fact`, and `message_history`. Each result carries the SHA, short SHA, author, and commit timestamp.
+
+### `experimental.auto_search`
+
+| Key | Type | Default |
+|-----|------|---------|
+| `experimental.auto_search.enabled` | `boolean` | `false` |
+| `experimental.auto_search.score_threshold` | `number` | `0.65` |
+| `experimental.auto_search.min_prompt_chars` | `number` | `20` |
+
+When enabled, Magic Context runs a background `ctx_search` on each new user message and, when a strong match is found, appends a compact "vague recall" hint to that user message. The hint surfaces highly compressed fragments from the best matches so the agent can decide whether to run `ctx_search` for the full content.
+
+The hint looks like:
+
+```xml
+<ctx-search-hint>
+Your memory may contain related context (3 related fragments):
+- install.sh bunx --bun node stdin redirection
+- magic-context fail closed durable storage unavailable
+- commit abcd123 5d ago: install: force bun runtime in bunx invocation
+Run ctx_search to retrieve full context if relevant.
+</ctx-search-hint>
+```
+
+- **Memory fragments** are caveman-ultra compressed (stop words stripped, common verbs replaced) — dense keywords that mirror vague human recall.
+- **Commit fragments** are the raw commit message (truncated, prefixed with `sha + relative age`) — commit messages are already compressed.
+- **Session facts** use the same caveman-ultra compression as memories.
+
+**Parameters:**
+
+- `score_threshold`: minimum top-hit cosine score for the hint to fire (0.5–0.9, default 0.65). More permissive than direct injection because false-positive cost is small — the agent ignores irrelevant hints.
+- `min_prompt_chars`: minimum user message length to trigger auto-search (default 20). Short prompts like "yes" or "ok" don't get a hint.
+
+**Suppression rules.** The hint is not appended when:
+
+1. `<ctx-search-hint>`, `<sidekick-augmentation>`, or `<ctx-search-auto>` is already present on the user message (avoids double-nudging when `/ctx-aug` was invoked).
+2. The user message is shorter than `min_prompt_chars`.
+3. No result clears the threshold.
+4. An earlier pass already appended a hint for this message id (replayed verbatim on defer passes for cache safety).
+
+**Cache safety.** The hint is appended to the current user message during the first transform pass of that turn — this message has not been cached by the provider yet because it just arrived. On subsequent defer passes the same hint text is replayed exactly (from a deterministic per-message cache), so the append is idempotent and never rewrites cached content.
+
+**Tokens.** Hints are hard-capped at ~200 tokens (3 fragments × ~20-40 tokens each plus framing). Well under the cost of full-content injection (~500+ tokens), while still giving the agent enough signal to decide whether to search.
+
 ## Commands
 
 | Command | Description |

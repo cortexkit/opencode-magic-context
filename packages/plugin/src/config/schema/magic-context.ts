@@ -184,6 +184,27 @@ export interface MagicContextConfig {
         /** Inject elapsed-time markers between user messages and date ranges on
          *  compartments so the agent has a wall-clock sense of the session. */
         temporal_awareness: boolean;
+        /** Index git commit messages from HEAD into a new ctx_search source so
+         *  agents can recall recent regressions, fixes, and decisions from
+         *  commit history without running git log manually. */
+        git_commit_indexing: {
+            enabled: boolean;
+            /** Days of history to index (default: 365) */
+            since_days: number;
+            /** Max commits kept per project; oldest evicted (default: 2000) */
+            max_commits: number;
+        };
+        /** Appends a compact hint to new user messages when ctx_search finds
+         *  highly-related memories, facts, or git commits. Does NOT inject
+         *  full content — just vague fragments that nudge the agent to run
+         *  ctx_search for full context if relevant. */
+        auto_search: {
+            enabled: boolean;
+            /** Top hit score must exceed this threshold for the hint to fire. */
+            score_threshold: number;
+            /** Minimum user message length in characters (skip short prompts). */
+            min_prompt_chars: number;
+        };
     };
     embedding: EmbeddingConfig;
     memory: {
@@ -354,11 +375,38 @@ export const MagicContextConfigSchema = z
                  *  date attributes on compartments. Gives the agent a sense of session
                  *  pacing and "how long ago" across multi-day sessions. Default: false. */
                 temporal_awareness: z.boolean().default(false),
+                /** Index git commit messages from HEAD into ctx_search. Commits
+                 *  become a 4th searchable source alongside memories, facts, and
+                 *  session history. Default: false. */
+                git_commit_indexing: z
+                    .object({
+                        enabled: z.boolean().default(false),
+                        /** Days of HEAD history to index (min: 7, max: 3650, default: 365) */
+                        since_days: z.number().min(7).max(3650).default(365),
+                        /** Max commits kept per project; oldest evicted (min: 100, max: 20000, default: 2000) */
+                        max_commits: z.number().min(100).max(20000).default(2000),
+                    })
+                    .default({ enabled: false, since_days: 365, max_commits: 2000 }),
+                /** Auto-search hint: transform-time ctx_search on each new user
+                 *  message; when top hit clears the threshold, append a compact
+                 *  <ctx-search-hint> block of vague fragments to that user message.
+                 *  Does NOT inject full content. Default: false. */
+                auto_search: z
+                    .object({
+                        enabled: z.boolean().default(false),
+                        /** Top hit score must exceed this threshold for the hint to fire (min: 0.3, max: 0.95, default: 0.65) */
+                        score_threshold: z.number().min(0.3).max(0.95).default(0.65),
+                        /** Skip hint when user message is shorter than this (min: 5, max: 500, default: 20) */
+                        min_prompt_chars: z.number().min(5).max(500).default(20),
+                    })
+                    .default({ enabled: false, score_threshold: 0.65, min_prompt_chars: 20 }),
             })
             .default({
                 user_memories: { enabled: false, promotion_threshold: 3 },
                 pin_key_files: { enabled: false, token_budget: 10000, min_reads: 4 },
                 temporal_awareness: false,
+                git_commit_indexing: { enabled: false, since_days: 365, max_commits: 2000 },
+                auto_search: { enabled: false, score_threshold: 0.65, min_prompt_chars: 20 },
             }),
         /** Cross-session memory configuration */
         memory: z

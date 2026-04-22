@@ -81,6 +81,16 @@ describe("MagicContextConfigSchema", () => {
                         min_reads: 4,
                     },
                     temporal_awareness: false,
+                    git_commit_indexing: {
+                        enabled: false,
+                        since_days: 365,
+                        max_commits: 2000,
+                    },
+                    auto_search: {
+                        enabled: false,
+                        score_threshold: 0.65,
+                        min_prompt_chars: 20,
+                    },
                 },
                 embedding: {
                     provider: "openai-compatible",

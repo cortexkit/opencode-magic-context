@@ -89,6 +89,7 @@ export function createToolRegistry(args: {
             projectPath,
             memoryEnabled,
             embeddingEnabled: embeddingConfig.provider !== "off",
+            gitCommitsEnabled: pluginConfig.experimental?.git_commit_indexing?.enabled === true,
         }),
         ...(memoryEnabled
             ? {

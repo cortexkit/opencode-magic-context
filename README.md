@@ -50,6 +50,10 @@ Your agent should never stop working to manage its own context. Magic Context is
 
 **Temporal Awareness** — gives the agent real-time perception. Each user message gets a small `<!-- +5m -->`/`<!-- +2h 15m -->`/`<!-- +3d 4h -->` gap marker showing time since the previous message, and every compartment in `<session-history>` carries `start-date`/`end-date` attributes. Lets the agent reason correctly about how long a build ran, when a decision was made, or how stale a prior session is. Cache-safe — markers derive from immutable timestamps. Enable with `experimental.temporal_awareness: true`.
 
+**Git Commit Indexing** — indexes HEAD git commits (skipping merges) from the project and makes them searchable through `ctx_search`. Commits are embedded so semantic queries like "when did we change the auth pattern" or "why did we pick X over Y" surface the right work. HEAD-only, windowed to the last year by default, capped at 2000 commits per project with oldest evicted. Enable with `experimental.git_commit_indexing.enabled: true`.
+
+**Auto Search Hints** — before each turn, Magic Context runs a background `ctx_search` on your prompt. When highly relevant content exists, a compact "vague recall" hint is appended to your message with caveman-compressed fragments of the top matches — like a human feeling they almost remember something and going to check their notes. The agent then decides whether to run `ctx_search` for the full content. Cache-safe, fires on top-score ≥ 0.65 by default. Enable with `experimental.auto_search.enabled: true`.
+
 ---
 
 ## Get Started

@@ -92,6 +92,12 @@ export interface MagicContextDeps {
             user_memories?: { enabled: boolean; promotion_threshold: number };
             pin_key_files?: { enabled: boolean; token_budget: number; min_reads: number };
             temporal_awareness?: boolean;
+            git_commit_indexing?: { enabled: boolean; since_days: number; max_commits: number };
+            auto_search?: {
+                enabled: boolean;
+                score_threshold: number;
+                min_prompt_chars: number;
+            };
         };
     };
 }
@@ -275,6 +281,17 @@ export function createMagicContextHook(deps: MagicContextDeps) {
                 ? undefined
                 : deps.config.compressor?.cooldown_ms,
         liveModelBySession,
+        autoSearch: deps.config.experimental?.auto_search?.enabled
+            ? {
+                  enabled: true,
+                  scoreThreshold: deps.config.experimental.auto_search.score_threshold,
+                  minPromptChars: deps.config.experimental.auto_search.min_prompt_chars,
+                  memoryEnabled: deps.config.memory?.enabled !== false,
+                  embeddingEnabled: deps.config.experimental?.auto_search?.enabled === true,
+                  gitCommitsEnabled:
+                      deps.config.experimental?.git_commit_indexing?.enabled === true,
+              }
+            : undefined,
     });
     const eventHandler = createEventHandler({
         contextUsageMap,

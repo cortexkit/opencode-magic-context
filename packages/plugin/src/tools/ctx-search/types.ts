@@ -10,6 +10,8 @@ export interface CtxSearchToolDeps {
     projectPath: string;
     memoryEnabled: boolean;
     embeddingEnabled: boolean;
+    /** When true, ctx_search surfaces indexed git commits as a 4th source. */
+    gitCommitsEnabled?: boolean;
     /** Override message reader for testing (avoids opening OpenCode DB in CI). */
     readMessages?: (sessionId: string) => Array<{
         ordinal: number;

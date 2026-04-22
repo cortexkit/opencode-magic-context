@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { readRawSessionMessages } from "../../hooks/magic-context/read-session-chunk";
 import type { RawMessage } from "../../hooks/magic-context/read-session-raw";
 import { log } from "../../shared/logger";
+import { type GitCommitSearchHit, searchGitCommitsSync } from "./git-commits";
 import {
     ensureMemoryEmbeddings,
     getMemoriesByProject,
@@ -29,6 +30,9 @@ const RESULT_PREVIEW_LIMIT = 220;
 const MEMORY_SOURCE_BOOST = 1.3;
 const FACT_SOURCE_BOOST = 1.15;
 const MESSAGE_SOURCE_BOOST = 1.0;
+/** Git commits boost — slightly below memories because commit messages are
+ *  terser by nature. Ranks above raw history but below curated memory. */
+const GIT_COMMIT_SOURCE_BOOST = 1.2;
 
 interface MessageSearchRow {
     messageOrdinal?: number | string;
@@ -48,6 +52,9 @@ export interface UnifiedSearchOptions {
     isEmbeddingRuntimeEnabled?: () => boolean;
     /** Only return message-history hits with ordinal ≤ this value (e.g. last compartment end). -1 or omit to search all. */
     maxMessageOrdinal?: number;
+    /** Include indexed git commits in the result set. Default false — the
+     *  feature is gated behind experimental.git_commit_indexing config. */
+    gitCommitsEnabled?: boolean;
 }
 
 export interface MemorySearchResult {
@@ -76,7 +83,22 @@ export interface MessageSearchResult {
     role: string;
 }
 
-export type UnifiedSearchResult = MemorySearchResult | FactSearchResult | MessageSearchResult;
+export interface GitCommitSearchResult {
+    source: "git_commit";
+    content: string;
+    score: number;
+    sha: string;
+    shortSha: string;
+    author: string | null;
+    committedAtMs: number;
+    matchType: "semantic" | "fts" | "hybrid";
+}
+
+export type UnifiedSearchResult =
+    | MemorySearchResult
+    | FactSearchResult
+    | MessageSearchResult
+    | GitCommitSearchResult;
 
 function normalizeLimit(limit?: number): number {
     if (typeof limit !== "number" || !Number.isFinite(limit)) {
@@ -444,6 +466,8 @@ function getSourceBoost(result: UnifiedSearchResult): number {
             return FACT_SOURCE_BOOST;
         case "message":
             return MESSAGE_SOURCE_BOOST;
+        case "git_commit":
+            return GIT_COMMIT_SOURCE_BOOST;
     }
 }
 
@@ -467,7 +491,54 @@ function compareUnifiedResults(left: UnifiedSearchResult, right: UnifiedSearchRe
         return left.messageOrdinal - right.messageOrdinal;
     }
 
+    if (left.source === "git_commit" && right.source === "git_commit") {
+        // Newer commits win ties.
+        return right.committedAtMs - left.committedAtMs;
+    }
+
     return 0;
+}
+
+function toGitCommitResult(hit: GitCommitSearchHit): GitCommitSearchResult {
+    return {
+        source: "git_commit",
+        content: previewText(hit.commit.message),
+        score: hit.score,
+        sha: hit.commit.sha,
+        shortSha: hit.commit.shortSha,
+        author: hit.commit.author,
+        committedAtMs: hit.commit.committedAtMs,
+        matchType: hit.matchType,
+    };
+}
+
+async function searchGitCommitsAsync(args: {
+    db: Database;
+    projectPath: string;
+    query: string;
+    limit: number;
+    embeddingEnabled: boolean;
+    embedQuery: (text: string) => Promise<Float32Array | null>;
+    isEmbeddingRuntimeEnabled: () => boolean;
+}): Promise<GitCommitSearchResult[]> {
+    if (args.limit <= 0) return [];
+
+    let queryEmbedding: Float32Array | null = null;
+    if (args.embeddingEnabled && args.isEmbeddingRuntimeEnabled()) {
+        try {
+            queryEmbedding = await args.embedQuery(args.query);
+        } catch (error) {
+            log(
+                `[search] git commit query embedding failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+        }
+    }
+
+    const hits = searchGitCommitsSync(args.db, args.projectPath, args.query, {
+        limit: args.limit,
+        queryEmbedding,
+    });
+    return hits.map(toGitCommitResult);
 }
 
 export async function unifiedSearch(
@@ -485,16 +556,21 @@ export async function unifiedSearch(
     const limit = normalizeLimit(options.limit);
     const tierLimit = Math.max(limit * 3, DEFAULT_UNIFIED_SEARCH_LIMIT);
 
-    const [memoryResults, factResults, messageResults] = await Promise.all([
+    const embeddingEnabled = options.embeddingEnabled ?? true;
+    const embedQuery = options.embedQuery ?? embedText;
+    const isEmbeddingRuntimeEnabled = options.isEmbeddingRuntimeEnabled ?? isEmbeddingEnabled;
+    const gitCommitsEnabled = options.gitCommitsEnabled ?? false;
+
+    const [memoryResults, factResults, messageResults, gitCommitResults] = await Promise.all([
         searchMemories({
             db,
             projectPath,
             query: trimmedQuery,
             limit: tierLimit,
             memoryEnabled: options.memoryEnabled ?? true,
-            embeddingEnabled: options.embeddingEnabled ?? true,
-            embedQuery: options.embedQuery ?? embedText,
-            isEmbeddingRuntimeEnabled: options.isEmbeddingRuntimeEnabled ?? isEmbeddingEnabled,
+            embeddingEnabled,
+            embedQuery,
+            isEmbeddingRuntimeEnabled,
         }),
         Promise.resolve(searchFacts({ db, sessionId, query: trimmedQuery, limit: tierLimit })),
         Promise.resolve(
@@ -507,9 +583,20 @@ export async function unifiedSearch(
                 maxOrdinal: options.maxMessageOrdinal,
             }),
         ),
+        gitCommitsEnabled
+            ? searchGitCommitsAsync({
+                  db,
+                  projectPath,
+                  query: trimmedQuery,
+                  limit: tierLimit,
+                  embeddingEnabled,
+                  embedQuery,
+                  isEmbeddingRuntimeEnabled,
+              })
+            : Promise.resolve([] as GitCommitSearchResult[]),
     ]);
 
-    const results = [...memoryResults, ...factResults, ...messageResults]
+    const results = [...memoryResults, ...factResults, ...messageResults, ...gitCommitResults]
         .sort(compareUnifiedResults)
         .slice(0, limit);
 

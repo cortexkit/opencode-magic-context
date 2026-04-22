@@ -9,6 +9,7 @@ import {
 import { clearHistorianFailureState } from "../../features/magic-context/storage-meta-persisted";
 import type { PluginContext } from "../../plugin/types";
 import { sessionLog } from "../../shared/logger";
+import { clearAutoSearchForSession } from "./auto-search-runner";
 import { FORCE_COMPARTMENT_PERCENTAGE } from "./compartment-trigger";
 import { getMessageUpdatedAssistantInfo, getSessionProperties } from "./event-payloads";
 import { resolveSessionId as resolveEventSessionId } from "./event-resolvers";
@@ -168,6 +169,7 @@ export function createEventHook(args: {
             args.lastHeuristicsTurnId.delete(sessionId);
             args.commitSeenLastPass?.delete(sessionId);
             clearNoteNudgeState(args.db, sessionId);
+            clearAutoSearchForSession(sessionId);
         }
 
         if (input.event.type === "message.removed") {
