@@ -15,7 +15,6 @@ import { loadPluginConfig } from "./index";
 function loadWithUserConfig(configText: string, extraEnv: Record<string, string> = {}) {
     const xdg = mkdtempSync(join(tmpdir(), "mc-config-test-"));
     const configDir = join(xdg, "opencode");
-    // biome-ignore lint/correctness/noNodejsModules: test helper
     const fs = require("node:fs") as typeof import("node:fs");
     fs.mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, "magic-context.jsonc"), configText, "utf-8");
@@ -125,5 +124,80 @@ describe("loadPluginConfig — secret redaction", () => {
         expect(combined).toContain("execute_threshold_percentage");
         // `number 5` is the human-friendly safe render.
         expect(combined).toMatch(/number 5/);
+    });
+});
+
+describe("loadPluginConfig — experimental graduation migration", () => {
+    it("migrates experimental.user_memories object block to dreamer.user_memories", () => {
+        const config = JSON.stringify({
+            experimental: {
+                user_memories: {
+                    enabled: true,
+                    promotion_threshold: 5,
+                },
+            },
+        });
+
+        const result = loadWithUserConfig(config);
+        expect(result.dreamer?.user_memories?.enabled).toBe(true);
+        expect(result.dreamer?.user_memories?.promotion_threshold).toBe(5);
+        // Warning so users know to run doctor.
+        expect(result.configWarnings?.join("\n")).toContain("experimental.user_memories");
+    });
+
+    it("coerces primitive experimental.user_memories: false to dreamer object shape", () => {
+        // Without coercion, Zod rejects the primitive and silently falls back
+        // to the new default (enabled=true) — flipping the user's opt-out.
+        const config = JSON.stringify({
+            experimental: {
+                user_memories: false,
+            },
+        });
+
+        const result = loadWithUserConfig(config);
+        expect(result.dreamer?.user_memories?.enabled).toBe(false);
+    });
+
+    it("coerces primitive experimental.pin_key_files: true to dreamer object shape", () => {
+        const config = JSON.stringify({
+            experimental: {
+                pin_key_files: true,
+            },
+        });
+
+        const result = loadWithUserConfig(config);
+        expect(result.dreamer?.pin_key_files?.enabled).toBe(true);
+    });
+
+    it("preserves existing dreamer.user_memories over legacy experimental.user_memories", () => {
+        // When both exist, dreamer.* wins (user has graduated), but missing
+        // sub-fields from the old block fill in.
+        const config = JSON.stringify({
+            experimental: {
+                user_memories: {
+                    enabled: false,
+                    promotion_threshold: 10,
+                },
+            },
+            dreamer: {
+                user_memories: {
+                    enabled: true,
+                    // Intentionally no promotion_threshold — should pick up from old block.
+                },
+            },
+        });
+
+        const result = loadWithUserConfig(config);
+        // dreamer.enabled wins.
+        expect(result.dreamer?.user_memories?.enabled).toBe(true);
+        // Missing sub-field fills in from old block.
+        expect(result.dreamer?.user_memories?.promotion_threshold).toBe(10);
+    });
+
+    it("is a no-op when no experimental block exists", () => {
+        const config = JSON.stringify({ enabled: true });
+        const result = loadWithUserConfig(config);
+        // No warning, no disruption.
+        expect(result.configWarnings).toBeUndefined();
     });
 });

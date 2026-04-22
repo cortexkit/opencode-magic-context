@@ -124,10 +124,120 @@ function redactConfigValue(value: unknown): string {
     return typeof value;
 }
 
+/**
+ * Startup-time shim for graduated experimental features.
+ *
+ * v0.14 graduated `experimental.user_memories` and `experimental.pin_key_files`
+ * into `dreamer.user_memories` / `dreamer.pin_key_files`. Doctor runs an
+ * on-disk migration, but users who never run doctor would otherwise lose their
+ * opt-in/opt-out because the graduated keys are no longer in the schema — Zod
+ * silently strips unknown keys.
+ *
+ * This shim runs in-memory on every load: if the user has legacy
+ * `experimental.<graduated-key>` blocks, we reshape the raw config so the
+ * new schema sees them at their graduated path. The on-disk file stays
+ * untouched (doctor is still the tool that cleans it up), and the user's
+ * explicit intent is preserved for this session's runtime behavior.
+ *
+ * Primitive values (e.g., `experimental.user_memories: true`) are coerced to
+ * `{ enabled: <bool> }` object form so Zod accepts them. Without this coercion,
+ * the primitive would fail schema validation and fall back to the graduated
+ * default — silently flipping a user's explicit `false` to the new `true`
+ * default, or vice versa.
+ *
+ * Idempotent: if the new path already has a value, we don't overwrite it.
+ */
+function migrateLegacyExperimental(
+    rawConfig: Record<string, unknown>,
+    warnings: string[],
+): Record<string, unknown> {
+    const experimental = rawConfig.experimental;
+    if (typeof experimental !== "object" || experimental === null) {
+        return rawConfig;
+    }
+    const exp = experimental as Record<string, unknown>;
+    const hasUM = "user_memories" in exp;
+    const hasPKF = "pin_key_files" in exp;
+    if (!hasUM && !hasPKF) {
+        return rawConfig;
+    }
+
+    // Clone shallowly — we only mutate the experimental + dreamer branches.
+    const patched: Record<string, unknown> = { ...rawConfig };
+    const dreamer =
+        typeof patched.dreamer === "object" && patched.dreamer !== null
+            ? { ...(patched.dreamer as Record<string, unknown>) }
+            : ({} as Record<string, unknown>);
+    const newExperimental = { ...exp };
+
+    const coerceToObject = (value: unknown): Record<string, unknown> | undefined => {
+        if (typeof value === "boolean") {
+            return { enabled: value };
+        }
+        if (typeof value === "object" && value !== null) {
+            return { ...(value as Record<string, unknown>) };
+        }
+        return undefined;
+    };
+
+    if (hasUM) {
+        const oldUM = coerceToObject(exp.user_memories);
+        if (oldUM !== undefined) {
+            if (dreamer.user_memories === undefined) {
+                dreamer.user_memories = oldUM;
+                warnings.push(
+                    'Migrated "experimental.user_memories" → "dreamer.user_memories" in-memory (run `doctor` to persist).',
+                );
+            } else if (
+                typeof dreamer.user_memories === "object" &&
+                dreamer.user_memories !== null
+            ) {
+                // Both exist: dreamer.* wins (user has graduated), but fill
+                // in any sub-fields that only exist on the old block so
+                // explicit settings like promotion_threshold aren't lost.
+                dreamer.user_memories = {
+                    ...oldUM,
+                    ...(dreamer.user_memories as Record<string, unknown>),
+                };
+            }
+        }
+        delete newExperimental.user_memories;
+    }
+
+    if (hasPKF) {
+        const oldPKF = coerceToObject(exp.pin_key_files);
+        if (oldPKF !== undefined) {
+            if (dreamer.pin_key_files === undefined) {
+                dreamer.pin_key_files = oldPKF;
+                warnings.push(
+                    'Migrated "experimental.pin_key_files" → "dreamer.pin_key_files" in-memory (run `doctor` to persist).',
+                );
+            } else if (
+                typeof dreamer.pin_key_files === "object" &&
+                dreamer.pin_key_files !== null
+            ) {
+                dreamer.pin_key_files = {
+                    ...oldPKF,
+                    ...(dreamer.pin_key_files as Record<string, unknown>),
+                };
+            }
+        }
+        delete newExperimental.pin_key_files;
+    }
+
+    patched.experimental = newExperimental;
+    patched.dreamer = dreamer;
+    return patched;
+}
+
 function parsePluginConfig(
     rawConfig: Record<string, unknown>,
 ): MagicContextPluginConfig & { configWarnings?: string[] } {
-    const parsed = MagicContextConfigSchema.safeParse(rawConfig);
+    // Pre-Zod shim: reshape legacy experimental.* graduated keys so the user's
+    // opt-in/out state survives upgrades even when they never run `doctor`.
+    const preMigrationWarnings: string[] = [];
+    const migrated = migrateLegacyExperimental(rawConfig, preMigrationWarnings);
+    const parsed = MagicContextConfigSchema.safeParse(migrated);
     const disabledHooks = Array.isArray(rawConfig.disabled_hooks)
         ? rawConfig.disabled_hooks.filter((value): value is string => typeof value === "string")
         : undefined;
@@ -141,6 +251,9 @@ function parsePluginConfig(
             ...parsed.data,
             disabled_hooks: disabledHooks,
             command,
+            ...(preMigrationWarnings.length > 0
+                ? { configWarnings: preMigrationWarnings }
+                : {}),
         };
     }
 
@@ -182,20 +295,28 @@ function parsePluginConfig(
         }
     }
 
-    const retryParsed = MagicContextConfigSchema.safeParse(patched);
+    // Re-run migration on the field-recovered patched config so legacy
+    // experimental blocks still migrate on the recovery path.
+    const retryMigrated = migrateLegacyExperimental(patched, preMigrationWarnings);
+    const retryParsed = MagicContextConfigSchema.safeParse(retryMigrated);
     if (retryParsed.success) {
         return {
             ...retryParsed.data,
             disabled_hooks: disabledHooks,
             command,
-            configWarnings: warnings,
+            configWarnings: [...preMigrationWarnings, ...warnings],
         };
     }
 
     // If even the patched version fails (shouldn't happen), fall back to full defaults
     // but keep enabled:true — the user intended to use the plugin.
     warnings.push("Config recovery failed, using all defaults.");
-    return { ...defaults, disabled_hooks: disabledHooks, command, configWarnings: warnings };
+    return {
+        ...defaults,
+        disabled_hooks: disabledHooks,
+        command,
+        configWarnings: [...preMigrationWarnings, ...warnings],
+    };
 }
 
 export function loadPluginConfig(

@@ -464,8 +464,17 @@ export async function runDoctor(
                 const oldUM = experimental.user_memories;
                 const existingUM = dreamer.user_memories;
                 if (existingUM === undefined) {
-                    // No dreamer.user_memories yet — move the whole block over.
-                    dreamer.user_memories = oldUM;
+                    // No dreamer.user_memories yet — move the old value over.
+                    // Coerce primitives (e.g., `experimental.user_memories: true`)
+                    // to object shape so the Zod schema accepts them. Without
+                    // this coercion, a primitive would trip schema validation
+                    // and silently fall back to defaults — losing the user's
+                    // explicit opt-in/out state.
+                    if (typeof oldUM === "boolean") {
+                        dreamer.user_memories = { enabled: oldUM };
+                    } else {
+                        dreamer.user_memories = oldUM;
+                    }
                 } else if (
                     typeof oldUM === "object" &&
                     oldUM !== null &&
