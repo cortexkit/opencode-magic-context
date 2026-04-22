@@ -99,8 +99,15 @@ export async function indexCommitsForProject(
         if (commits.length === 0) {
             // No new commits. Still enforce the cap in case prior runs overflowed.
             result.evicted = enforceProjectCap(db, projectPath, options.maxCommits);
+            log(
+                `[git-commits] no new commits for ${projectPath} (sinceMs=${sinceMs} latestIndexed=${latestIndexed ?? "none"} evicted=${result.evicted})`,
+            );
             return result;
         }
+
+        log(
+            `[git-commits] read ${commits.length} commits for ${projectPath} (sinceMs=${sinceMs} latestIndexed=${latestIndexed ?? "none"})`,
+        );
 
         const upsert = upsertCommits(db, projectPath, commits);
         result.inserted = upsert.inserted;
@@ -108,6 +115,9 @@ export async function indexCommitsForProject(
         result.evicted = enforceProjectCap(db, projectPath, options.maxCommits);
 
         if (options.skipEmbed || !isEmbeddingEnabled()) {
+            log(
+                `[git-commits] indexed ${projectPath}: scanned=${result.scanned} inserted=${result.inserted} updated=${result.updated} evicted=${result.evicted} embedded=0 (embedding skipped: skipEmbed=${options.skipEmbed === true} embeddingEnabled=${isEmbeddingEnabled()})`,
+            );
             return result;
         }
 
