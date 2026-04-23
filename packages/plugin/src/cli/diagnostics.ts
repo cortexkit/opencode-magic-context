@@ -1,8 +1,10 @@
+import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { parse as parseJsonc } from "comment-json";
+import { parseCompartmentOutput } from "../hooks/magic-context/compartment-parser";
 import { detectConflicts } from "../shared/conflict-detector";
 import { type ConfigPaths, detectConfigPaths } from "./config-paths";
 import { getOpenCodeVersion, isOpenCodeInstalled } from "./opencode-helpers";
@@ -48,8 +50,48 @@ export interface DiagnosticReport {
     historianDumps: {
         dir: string;
         count: number;
-        recent: { name: string; ageMinutes: number; sizeKb: number }[];
+        recent: HistorianDumpSummary[];
     };
+    /** Most recent historian-failure rows from session_meta across all sessions. */
+    historianFailures: HistorianFailureSummary[];
+}
+
+export interface HistorianDumpSummary {
+    name: string;
+    ageMinutes: number;
+    sizeKb: number;
+    /** Parsed metadata — only structural fields, never raw XML content. */
+    meta?: HistorianDumpMeta;
+    /** If the XML could not be parsed, reason for failure. */
+    parseError?: string;
+}
+
+export interface HistorianDumpMeta {
+    /** Number of <compartment> elements found. */
+    compartmentCount: number;
+    /** Smallest start ordinal across compartments, or null if none. */
+    minStart: number | null;
+    /** Largest end ordinal across compartments, or null if none. */
+    maxEnd: number | null;
+    /** Value of <unprocessed_from> tag, if present. */
+    unprocessedFrom: number | null;
+    /** Number of <fact> items grouped by category. */
+    factCountByCategory: Record<string, number>;
+    /** Number of <user_observations> items. */
+    userObservationCount: number;
+    /** Total number of compartment ordinal gaps (missing ranges between consecutive compartments). */
+    ordinalGapCount: number;
+    /** Total number of overlapping compartment ranges. */
+    ordinalOverlapCount: number;
+}
+
+export interface HistorianFailureSummary {
+    sessionId: string;
+    failureCount: number;
+    /** Sanitized truncated last-error text. May be empty if never set. */
+    lastError: string;
+    /** ISO timestamp of last failure, or empty if never failed. */
+    lastFailureAt: string;
 }
 
 // ── Version + path helpers ──────────────────────────────────────────
@@ -175,8 +217,38 @@ function configHasPluginEntry(config: Record<string, unknown> | null): boolean {
         return false;
     });
 }
-
-// ── Historian dump enumeration ─────────────────────────────────────
+function parseHistorianDumpMeta(path: string): HistorianDumpMeta | { error: string } {
+    try {
+        const xml = readFileSync(path, "utf-8");
+        const parsed = parseCompartmentOutput(xml);
+        const factCountByCategory: Record<string, number> = {};
+        for (const fact of parsed.facts) {
+            factCountByCategory[fact.category] = (factCountByCategory[fact.category] ?? 0) + 1;
+        }
+        const starts = parsed.compartments.map((c) => c.startMessage);
+        const ends = parsed.compartments.map((c) => c.endMessage);
+        let gaps = 0;
+        let overlaps = 0;
+        for (let i = 1; i < parsed.compartments.length; i++) {
+            const prev = parsed.compartments[i - 1];
+            const curr = parsed.compartments[i];
+            if (curr.startMessage > prev.endMessage + 1) gaps += 1;
+            else if (curr.startMessage <= prev.endMessage) overlaps += 1;
+        }
+        return {
+            compartmentCount: parsed.compartments.length,
+            minStart: starts.length > 0 ? Math.min(...starts) : null,
+            maxEnd: ends.length > 0 ? Math.max(...ends) : null,
+            unprocessedFrom: parsed.unprocessedFrom,
+            factCountByCategory,
+            userObservationCount: parsed.userObservations.length,
+            ordinalGapCount: gaps,
+            ordinalOverlapCount: overlaps,
+        };
+    } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+    }
+}
 
 function collectHistorianDumps(): DiagnosticReport["historianDumps"] {
     const dir = join(tmpdir(), "magic-context-historian");
@@ -197,14 +269,63 @@ function collectHistorianDumps(): DiagnosticReport["historianDumps"] {
             .sort((a, b) => b.mtime - a.mtime);
 
         const now = Date.now();
-        const recent = entries.slice(0, 3).map((entry) => ({
-            name: entry.name,
-            ageMinutes: Math.round((now - entry.mtime) / 60000),
-            sizeKb: entry.sizeKb,
-        }));
+        const recent: HistorianDumpSummary[] = entries.slice(0, 5).map((entry) => {
+            const meta = parseHistorianDumpMeta(join(dir, entry.name));
+            const summary: HistorianDumpSummary = {
+                name: entry.name,
+                ageMinutes: Math.round((now - entry.mtime) / 60000),
+                sizeKb: entry.sizeKb,
+            };
+            if ("error" in meta) {
+                summary.parseError = meta.error;
+            } else {
+                summary.meta = meta;
+            }
+            return summary;
+        });
         return { dir, count: entries.length, recent };
     } catch {
         return { dir, count: 0, recent: [] };
+    }
+}
+
+function collectHistorianFailures(storageDirPath: string): HistorianFailureSummary[] {
+    const contextDbPath = join(storageDirPath, "context.db");
+    if (!existsSync(contextDbPath)) return [];
+    let db: Database | null = null;
+    try {
+        db = new Database(contextDbPath, { readonly: true });
+        const rows = db
+            .prepare(
+                "SELECT session_id, historian_failure_count, historian_last_error, historian_last_failure_at FROM session_meta WHERE historian_failure_count > 0 ORDER BY historian_last_failure_at DESC LIMIT 10",
+            )
+            .all() as Array<{
+            session_id: unknown;
+            historian_failure_count: unknown;
+            historian_last_error: unknown;
+            historian_last_failure_at: unknown;
+        }>;
+        return rows.map((row) => {
+            const sessionId = typeof row.session_id === "string" ? row.session_id : "<unknown>";
+            const failureCount =
+                typeof row.historian_failure_count === "number" ? row.historian_failure_count : 0;
+            const rawError =
+                typeof row.historian_last_error === "string" ? row.historian_last_error : "";
+            const lastAt =
+                typeof row.historian_last_failure_at === "number"
+                    ? new Date(row.historian_last_failure_at).toISOString()
+                    : "";
+            const lastError = sanitizeString(rawError.replace(/\s+/g, " ").trim().slice(0, 400));
+            return { sessionId, failureCount, lastError, lastFailureAt: lastAt };
+        });
+    } catch {
+        return [];
+    } finally {
+        try {
+            db?.close();
+        } catch {
+            // ignore close errors
+        }
     }
 }
 
@@ -256,6 +377,7 @@ export async function collectDiagnostics(): Promise<DiagnosticReport> {
             sizeKb: Math.round(logFileSize / 1024),
         },
         historianDumps: collectHistorianDumps(),
+        historianFailures: collectHistorianFailures(storageDirPath),
     };
 }
 
@@ -329,9 +451,15 @@ export function renderDiagnosticsMarkdown(report: DiagnosticReport): string {
         "```",
         "",
         "### Historian dumps",
+        "(Metadata only — XML content is not included in this report.)",
         "```json",
         JSON.stringify(historianDumps, null, 2),
         "```",
+        "",
+        "### Historian failures (session_meta)",
+        report.historianFailures.length === 0
+            ? "_No sessions with historian failures._"
+            : ["```json", JSON.stringify(report.historianFailures, null, 2), "```"].join("\n"),
         "",
         "### Log file",
         `- Path: ${sanitizeString(report.logFile.path)}`,
