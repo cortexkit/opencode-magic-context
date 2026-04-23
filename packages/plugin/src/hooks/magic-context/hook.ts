@@ -35,6 +35,7 @@ import { createNudgePlacementStore, createTransform } from "./transform";
 
 export type { CommandExecuteInput, CommandExecuteOutput } from "./command-handler";
 
+import { checkCompactionMarkerConsistency } from "./compaction-marker-manager";
 import { executeContextRecomp } from "./compartment-runner";
 import {
     createChatMessageHook,
@@ -163,6 +164,19 @@ export function createMagicContextHook(deps: MagicContextDeps) {
 
     const projectPath = resolveProjectIdentity(deps.directory);
     registerDreamProjectDirectory(projectPath, deps.directory);
+
+    // Startup consistency check: reconcile any compaction markers whose state
+    // references rows that no longer exist in OpenCode's DB. This can happen
+    // if the plugin crashed between DB writes (context.db + opencode.db are
+    // separate stores with no cross-DB transaction) or if OpenCode's DB was
+    // modified externally. Gated on the same flag as marker writes.
+    if (deps.config.compaction_markers !== false) {
+        try {
+            checkCompactionMarkerConsistency(db);
+        } catch (error) {
+            log("[magic-context] startup compaction-marker consistency check failed:", error);
+        }
+    }
 
     let lastScheduleCheckMs = 0;
 
@@ -309,6 +323,12 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             clearInjectionCache(sessionId);
             deps.onSessionCacheInvalidated?.(sessionId);
         },
+        // Clean up per-session state the system-prompt handler maintains so
+        // these module/closure-scope maps don't accumulate entries over the
+        // plugin's lifetime (Finding #3).
+        onSessionDeleted: (sessionId: string) => {
+            systemPromptHash.clearSession(sessionId);
+        },
     });
 
     const runDreamQueueInBackground = (): void => {
@@ -450,7 +470,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
 
     const emergencyNudgeFired = new Set<string>();
 
-    const systemPromptHashHandler = createSystemPromptHashHandler({
+    const systemPromptHash = createSystemPromptHashHandler({
         db,
         protectedTags: deps.config.protected_tags,
         ctxReduceEnabled,
@@ -465,6 +485,7 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         experimentalPinKeyFilesTokenBudget: deps.config.dreamer?.pin_key_files?.token_budget,
         experimentalTemporalAwareness: deps.config.experimental?.temporal_awareness === true,
     });
+    const systemPromptHashHandler = systemPromptHash.handler;
 
     const eventHook = createEventHook({
         eventHandler,

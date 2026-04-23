@@ -19,8 +19,32 @@ const MAGIC_CONTEXT_MARKER = "## Magic Context";
 const PROJECT_DOCS_MARKER = "<project-docs>";
 const USER_PROFILE_MARKER = "<user-profile>";
 const KEY_FILES_MARKER = "<key-files>";
+
+// Module-scope caches are per-plugin-instance (one plugin process per OpenCode
+// process) and accumulate session entries over the plugin's lifetime. Without
+// cleanup on `session.deleted`, these maps grow unbounded. Exported so hook.ts
+// can register a cleanup callback tied to the session-deleted lifecycle event.
 const cachedUserProfileBySession = new Map<string, string | null>();
 const cachedKeyFilesBySession = new Map<string, string | null>();
+
+/**
+ * Clear all per-session cache entries the system-prompt handler maintains,
+ * including the module-scope user-profile/key-files maps and the per-handler
+ * sticky-date/cached-docs maps (the latter passed in via the cleanup handle).
+ * Called from the session-deleted event path.
+ */
+export function clearSystemPromptHashSession(
+    sessionId: string,
+    handleMaps: {
+        stickyDateBySession: Map<string, string>;
+        cachedDocsBySession: Map<string, string | null>;
+    },
+): void {
+    cachedUserProfileBySession.delete(sessionId);
+    cachedKeyFilesBySession.delete(sessionId);
+    handleMaps.stickyDateBySession.delete(sessionId);
+    handleMaps.cachedDocsBySession.delete(sessionId);
+}
 
 const DOC_FILES = ["ARCHITECTURE.md", "STRUCTURE.md"] as const;
 
@@ -83,7 +107,10 @@ export function createSystemPromptHashHandler(deps: {
     experimentalPinKeyFilesTokenBudget?: number;
     /** When true, add a temporal-awareness guidance paragraph + surface compartment dates */
     experimentalTemporalAwareness?: boolean;
-}): (input: { sessionID?: string }, output: { system: string[] }) => Promise<void> {
+}): {
+    handler: (input: { sessionID?: string }, output: { system: string[] }) => Promise<void>;
+    clearSession: (sessionId: string) => void;
+} {
     // Per-session sticky date: we freeze the date string from the system prompt
     // and only update it on cache-busting passes. This prevents a midnight date
     // flip from causing an unnecessary flush + cache rebuild.
@@ -96,7 +123,10 @@ export function createSystemPromptHashHandler(deps: {
 
     const shouldInjectDocs = deps.dreamerEnabled && deps.injectDocs;
 
-    return async (input, output): Promise<void> => {
+    const handler = async (
+        input: { sessionID?: string },
+        output: { system: string[] },
+    ): Promise<void> => {
         const sessionId = input.sessionID;
         if (!sessionId) return;
 
@@ -338,5 +368,15 @@ export function createSystemPromptHashHandler(deps: {
         } else if (Math.abs(sessionMeta.systemPromptTokens - systemPromptTokens) > 50) {
             updateSessionMeta(deps.db, sessionId, { systemPromptTokens });
         }
+    };
+
+    return {
+        handler,
+        clearSession: (sessionId: string) => {
+            clearSystemPromptHashSession(sessionId, {
+                stickyDateBySession,
+                cachedDocsBySession,
+            });
+        },
     };
 }
