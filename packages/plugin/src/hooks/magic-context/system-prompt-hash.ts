@@ -131,13 +131,25 @@ export function createSystemPromptHashHandler(deps: {
         if (!sessionId) return;
 
         // ── Step 1: Inject magic-context guidance ──
+        // Subagents get the no-reduce guidance variant: they run heuristic
+        // drops at execute threshold but have no historian, no nudges, no
+        // ctx_reduce tool. The no-reduce prompt explains what's auto-managed
+        // and omits tag-dropping instructions.
+        let sessionMetaEarly: import("../../features/magic-context/types").SessionMeta | undefined;
+        try {
+            sessionMetaEarly = getOrCreateSessionMeta(deps.db, sessionId);
+        } catch (error) {
+            sessionLog(sessionId, "system-prompt-hash session meta load failed:", error);
+        }
+        const isSubagentSession = sessionMetaEarly?.isSubagent === true;
+        const effectiveCtxReduceEnabled = isSubagentSession ? false : deps.ctxReduceEnabled;
         const fullPrompt = output.system.join("\n");
         if (fullPrompt.length > 0 && !fullPrompt.includes(MAGIC_CONTEXT_MARKER)) {
             const detectedAgent = detectAgentFromSystemPrompt(fullPrompt);
             const guidance = buildMagicContextSection(
                 detectedAgent,
                 deps.protectedTags,
-                deps.ctxReduceEnabled,
+                effectiveCtxReduceEnabled,
                 deps.dreamerEnabled,
                 deps.dropToolStructure,
                 deps.experimentalTemporalAwareness,
@@ -145,7 +157,7 @@ export function createSystemPromptHashHandler(deps: {
             output.system.push(guidance);
             sessionLog(
                 sessionId,
-                `injected ${detectedAgent ?? "generic"} guidance into system prompt`,
+                `injected ${detectedAgent ?? "generic"} guidance into system prompt (ctxReduce=${effectiveCtxReduceEnabled}, subagent=${isSubagentSession})`,
             );
         }
 

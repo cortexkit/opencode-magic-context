@@ -113,12 +113,27 @@ function extractToolTagMetadata(part: unknown): { toolName: string | null; input
     };
 }
 
+export interface TagMessagesOptions {
+    /**
+     * When true, skip injecting §N§ prefix into message text/tool output parts.
+     * DB-level tag records are still created normally — this flag only affects
+     * whether the agent-visible part content gets the tag prefix. Used when
+     * `ctx_reduce_enabled: false` so agents don't see tag markers they can't
+     * act on. Subagents also set this flag (they are always treated as
+     * ctx_reduce_enabled=false). Cache-safe: skipping is consistent across
+     * passes, so message shape stays stable.
+     */
+    skipPrefixInjection?: boolean;
+}
+
 export function tagMessages(
     sessionId: string,
     messages: MessageLike[],
     tagger: Tagger,
     db: ContextDatabase,
+    options: TagMessagesOptions = {},
 ): TagMessagesResult {
+    const skipPrefixInjection = options.skipPrefixInjection === true;
     const targets = new Map<number, TagTarget>();
     const reasoningByMessage = new Map<MessageLike, ThinkingLikePart[]>();
     const messageTagNumbers = new Map<MessageLike, number>();
@@ -229,7 +244,9 @@ export function tagMessages(
                         message,
                         Math.max(messageTagNumbers.get(message) ?? 0, tagId),
                     );
-                    textPart.text = prependTag(tagId, textPart.text);
+                    if (!skipPrefixInjection) {
+                        textPart.text = prependTag(tagId, textPart.text);
+                    }
                     targets.set(tagId, {
                         message,
                         setContent: (content) => {
@@ -267,7 +284,9 @@ export function tagMessages(
                         message,
                         Math.max(messageTagNumbers.get(message) ?? 0, tagId),
                     );
-                    toolPart.state.output = prependTag(tagId, toolPart.state.output);
+                    if (!skipPrefixInjection) {
+                        toolPart.state.output = prependTag(tagId, toolPart.state.output);
+                    }
                     toolTagByCallId.set(toolPart.callID, tagId);
                     if (thinkingParts.length > 0 && !toolThinkingByCallId.has(toolPart.callID)) {
                         toolThinkingByCallId.set(toolPart.callID, thinkingParts);
