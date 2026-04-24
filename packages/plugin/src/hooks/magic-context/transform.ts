@@ -13,6 +13,7 @@ import {
 import type { Tagger } from "../../features/magic-context/tagger";
 import type { ContextUsage, TagEntry } from "../../features/magic-context/types";
 import type { PluginContext } from "../../plugin/types";
+import { BoundedSessionMap } from "../../shared/bounded-session-map";
 import { getErrorMessage } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
 import { replayCavemanCompression } from "./caveman-cleanup";
@@ -69,10 +70,16 @@ import type { LiveModelBySession } from "./hook-handlers";
 // Messages are append-only once streaming completes, so the cached value is
 // stable across transform passes. Cleared on session.deleted and entries are
 // invalidated on message.removed via clearMessageTokensCache().
-const messageTokensBySession = new Map<
-    string,
+//
+// Bounded LRU on the outer key: sessions that are never explicitly deleted
+// (crashed OpenCode, archived but not deleted sessions, sessions outliving
+// the plugin process's interest) would otherwise leak their inner Maps
+// forever. 100 sessions is generously above any realistic active working
+// set — evicted entries are recomputed lazily on the next transform pass.
+const MESSAGE_TOKENS_CACHE_MAX = 100;
+const messageTokensBySession = new BoundedSessionMap<
     Map<string, { conversation: number; toolCall: number }>
->();
+>(MESSAGE_TOKENS_CACHE_MAX);
 
 function getMessageTokensCache(
     sessionId: string,
@@ -527,18 +534,25 @@ export function createTransform(deps: TransformDeps) {
 
         logTransformTiming(sessionId, "emergencyRecoveryBlock", tFirstPass);
 
+        // Resolve project identity ONCE per transform pass. Used by both
+        // prepareCompartmentInjection (memory filtering by project) and
+        // runCompartmentPhase (historian memory resolution). Computing it
+        // twice per turn is wasteful — resolveProjectIdentity caches by
+        // directory but still does a cache lookup on each call, and the
+        // first call per directory in a new process spawns `git rev-parse`.
+        const projectIdentity = deps.memoryConfig?.enabled
+            ? resolveProjectIdentity(deps.directory ?? process.cwd())
+            : undefined;
+
         let pendingCompartmentInjection: PreparedCompartmentInjection | null = null;
         if (fullFeatureMode) {
             const tInj = performance.now();
-            const projectPath = deps.memoryConfig?.enabled
-                ? resolveProjectIdentity(deps.directory ?? process.cwd())
-                : undefined;
             pendingCompartmentInjection = prepareCompartmentInjection(
                 db,
                 sessionId,
                 messages,
                 isCacheBusting,
-                projectPath,
+                projectIdentity,
                 deps.memoryConfig?.injectionBudgetTokens,
                 deps.experimentalTemporalAwareness,
             );
@@ -769,9 +783,7 @@ export function createTransform(deps: TransformDeps) {
             messages,
             pendingCompartmentInjection,
             fallbackModelId,
-            projectPath: deps.memoryConfig?.enabled
-                ? resolveProjectIdentity(deps.directory ?? process.cwd())
-                : undefined,
+            projectPath: projectIdentity,
             injectionBudgetTokens: deps.memoryConfig?.injectionBudgetTokens,
             getNotificationParams: rawGetNotifParams
                 ? () => rawGetNotifParams(sessionId)

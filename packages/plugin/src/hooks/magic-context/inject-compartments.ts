@@ -9,6 +9,7 @@ import {
 import { CATEGORY_PRIORITY } from "../../features/magic-context/memory/constants";
 import { getMemoriesByProject } from "../../features/magic-context/memory/storage-memory";
 import type { Memory, MemoryCategory } from "../../features/magic-context/memory/types";
+import { BoundedSessionMap } from "../../shared/bounded-session-map";
 import { sessionLog } from "../../shared/logger";
 import { getMessageTimesFromOpenCodeDb } from "./read-session-db";
 import { estimateTokens } from "./read-session-formatting";
@@ -31,8 +32,16 @@ export interface PreparedCompartmentInjection {
  * publications between passes do not bust the Anthropic prompt-cache prefix.
  * The cache is invalidated explicitly via clearInjectionCache() after
  * historian/compressor/recomp write new compartments or facts.
+ *
+ * Bounded LRU: session.deleted clears entries explicitly, but sessions that
+ * are never deleted (crashed OpenCode, force-quit, archived sessions) would
+ * otherwise leak PreparedCompartmentInjection objects holding tens of KB of
+ * XML each. 100 is generously above any realistic working set of active
+ * sessions — evicted entries are simply recomputed on the next cache-busting
+ * pass from the authoritative SQLite compartment state.
  */
-const injectionCache = new Map<string, PreparedCompartmentInjection>();
+const INJECTION_CACHE_MAX = 100;
+const injectionCache = new BoundedSessionMap<PreparedCompartmentInjection>(INJECTION_CACHE_MAX);
 
 export function clearInjectionCache(sessionId: string): void {
     injectionCache.delete(sessionId);
