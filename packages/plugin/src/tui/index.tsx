@@ -207,12 +207,19 @@ const StatusDialog = (props: { api: TuiPluginApi; s: StatusDetail }) => {
 
     const elapsed = () => (s().lastResponseTime > 0 ? Date.now() - s().lastResponseTime : 0)
 
-    // Token breakdown segments — same colors as sidebar
+    // Token breakdown segments — same colors as sidebar. Kept in sync with
+    // slots/sidebar-content.tsx so the status dialog and sidebar read identically.
     const COLORS = {
+        // Cool / structured — injected by the plugin into message[0]
         system: "#c084fc",
         compartments: "#60a5fa",
         facts: "#fbbf24",
         memories: "#34d399",
+        // Warm / user-facing — chat and tool traffic
+        conversation: "#f87171",
+        toolCalls: "#fb923c",
+        toolDefs: "#f472b6",
+        overhead: "#9ca3af",
     }
 
     const breakdownSegments = () => {
@@ -245,11 +252,13 @@ const StatusDialog = (props: { api: TuiPluginApi; s: StatusDetail }) => {
             })
 
         if (d.conversationTokens > 0)
-            segs.push({ label: "Conversation", tokens: d.conversationTokens, color: t().textMuted })
+            segs.push({ label: "Conversation", tokens: d.conversationTokens, color: COLORS.conversation })
         if (d.toolCallTokens > 0)
-            segs.push({ label: "Tool Calls", tokens: d.toolCallTokens, color: "#6b7280" })
+            segs.push({ label: "Tool Calls", tokens: d.toolCallTokens, color: COLORS.toolCalls })
         if (d.toolDefinitionTokens > 0)
-            segs.push({ label: "Tool Defs + Overhead", tokens: d.toolDefinitionTokens, color: "#9ca3af" })
+            segs.push({ label: "Tool Defs", tokens: d.toolDefinitionTokens, color: COLORS.toolDefs })
+        if (d.overheadTokens > 0)
+            segs.push({ label: "Overhead", tokens: d.overheadTokens, color: COLORS.overhead })
 
         return { segs, total }
     }

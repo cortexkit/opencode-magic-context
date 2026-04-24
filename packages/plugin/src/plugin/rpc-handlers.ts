@@ -6,6 +6,7 @@ import type { Database } from "bun:sqlite";
 import type { MagicContextConfig } from "../config/schema/magic-context";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
 import { openDatabase } from "../features/magic-context/storage";
+import { getMeasuredToolDefinitionTokens } from "../features/magic-context/tool-definition-tokens";
 import { resolveExecuteThresholdDetail } from "../hooks/magic-context/event-resolvers";
 import { getLiveNotificationParams } from "../hooks/magic-context/hook-handlers";
 import type { LiveSessionState } from "../hooks/magic-context/live-session-state";
@@ -61,7 +62,12 @@ function resolveConfigValue<T>(
     return defaultValue;
 }
 
-function buildSidebarSnapshot(db: Database, sessionId: string, directory: string): SidebarSnapshot {
+function buildSidebarSnapshot(
+    db: Database,
+    sessionId: string,
+    directory: string,
+    liveSessionState?: LiveSessionState,
+): SidebarSnapshot {
     const empty: SidebarSnapshot = {
         sessionId,
         usagePercentage: 0,
@@ -85,6 +91,7 @@ function buildSidebarSnapshot(db: Database, sessionId: string, directory: string
         conversationTokens: 0,
         toolCallTokens: 0,
         toolDefinitionTokens: 0,
+        overheadTokens: 0,
     };
 
     try {
@@ -231,23 +238,51 @@ function buildSidebarSnapshot(db: Database, sessionId: string, directory: string
             }
         }
 
-        // Display-layer attribution. The transform persists two separate
-        // counters from output.messages[]:
-        //   messagesBlockTokens (conversation_tokens)
-        //     = text + reasoning + image parts (includes injected
-        //       compartments/facts/memories in message[0]).
-        //   toolCallTokensRaw (tool_call_tokens)
-        //     = tool_use/tool_result/tool/tool-invocation parts.
-        // Strip the injected bits out of messagesBlockTokens to get real
-        // "Conversation". Tool call I/O inside messages is "Tool Calls".
-        // Tool schemas (OpenCode's separate `tools` request parameter) are not
-        // in messages — they surface as the residual "Tool Definitions".
+        // Display-layer attribution. Four measured-ish buckets + one residual:
+        //   messagesBlockTokens (conversation_tokens in session_meta)
+        //     = text + reasoning + image parts from output.messages[]. Includes
+        //       the injected <session-history> block in message[0].
+        //   toolCallTokensRaw (tool_call_tokens in session_meta)
+        //     = tool_use/tool_result/tool/tool-invocation parts in messages.
+        //   measuredToolDefTokens (tool.definition plugin hook)
+        //     = description + JSON-schema parameters for each tool OpenCode
+        //       sends in the `tools` request parameter, keyed by
+        //       {providerID, modelID, agentName}. Zero until the first turn
+        //       after plugin startup measures the active agent's tool set.
+        //   overheadTokens (residual)
+        //     = input − everything-above. Captures provider-side JSON envelope
+        //       around the tools array, tool_choice, cache-control markers,
+        //       and tokenizer imprecision.
+        //
+        // We strip injected compartments/facts/memories out of messagesBlockTokens
+        // because those are rendered by the plugin into message[0] text content
+        // and we want "Conversation" to reflect real user/assistant dialog only.
         const injectedInMessages = compartmentTokens + factTokens + memoryTokens;
         const conversationTokens = Math.max(0, messagesBlockTokens - injectedInMessages);
         const toolCallTokens = Math.max(0, toolCallTokensRaw);
-        const toolDefinitionTokens = Math.max(
+
+        // Measured tool schema cost. Resolved via the live-session-state latch
+        // (session → agent/model). When the plugin hasn't fired tool.definition
+        // yet for this session's current agent+model (brand-new session before
+        // first turn, or post-restart before any flight), returns 0 and all the
+        // tool-def cost shows up in overhead until the measurement lands.
+        let measuredToolDefTokens = 0;
+        if (liveSessionState) {
+            const model = liveSessionState.liveModelBySession.get(sessionId);
+            const agent = liveSessionState.agentBySession.get(sessionId);
+            if (model) {
+                measuredToolDefTokens =
+                    getMeasuredToolDefinitionTokens(model.providerID, model.modelID, agent) ?? 0;
+            }
+        }
+        const toolDefinitionTokens = measuredToolDefTokens;
+        const overheadTokens = Math.max(
             0,
-            inputTokens - systemPromptTokens - messagesBlockTokens - toolCallTokens,
+            inputTokens -
+                systemPromptTokens -
+                messagesBlockTokens -
+                toolCallTokens -
+                measuredToolDefTokens,
         );
 
         return {
@@ -273,6 +308,7 @@ function buildSidebarSnapshot(db: Database, sessionId: string, directory: string
             conversationTokens,
             toolCallTokens,
             toolDefinitionTokens,
+            overheadTokens,
         };
     } catch (err) {
         log("[rpc] sidebar-snapshot error:", err);
@@ -286,8 +322,9 @@ function buildStatusDetail(
     directory: string,
     modelKey?: string,
     config?: Record<string, unknown>,
+    liveSessionState?: LiveSessionState,
 ): StatusDetail {
-    const base = buildSidebarSnapshot(db, sessionId, directory);
+    const base = buildSidebarSnapshot(db, sessionId, directory, liveSessionState);
     const detail: StatusDetail = {
         ...base,
         tagCounter: 0,
@@ -495,7 +532,10 @@ export function registerRpcHandlers(
         const dir = String(params.directory ?? directory);
         const db = getDb();
         if (!db || !sessionId) return { error: "unavailable" };
-        return buildSidebarSnapshot(db, sessionId, dir) as unknown as Record<string, unknown>;
+        return buildSidebarSnapshot(db, sessionId, dir, liveSessionState) as unknown as Record<
+            string,
+            unknown
+        >;
     });
 
     rpcServer.handle("status-detail", async (params) => {
@@ -504,10 +544,14 @@ export function registerRpcHandlers(
         const modelKey = params.modelKey ? String(params.modelKey) : undefined;
         const db = getDb();
         if (!db || !sessionId) return { error: "unavailable" };
-        return buildStatusDetail(db, sessionId, dir, modelKey, rawConfig) as unknown as Record<
-            string,
-            unknown
-        >;
+        return buildStatusDetail(
+            db,
+            sessionId,
+            dir,
+            modelKey,
+            rawConfig,
+            liveSessionState,
+        ) as unknown as Record<string, unknown>;
     });
 
     rpcServer.handle("compartment-count", async (params) => {

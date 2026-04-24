@@ -51,6 +51,7 @@ const EMPTY_SNAPSHOT: SidebarSnapshot = {
     conversationTokens: 0,
     toolCallTokens: 0,
     toolDefinitionTokens: 0,
+    overheadTokens: 0,
 };
 
 /** Fetch sidebar snapshot from the server via RPC. */

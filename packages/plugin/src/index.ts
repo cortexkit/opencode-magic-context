@@ -6,6 +6,7 @@ import { loadPluginConfig } from "./config";
 import { getMagicContextBuiltinCommands } from "./features/builtin-commands/commands";
 import { DREAMER_SYSTEM_PROMPT } from "./features/magic-context/dreamer/task-prompts";
 import { SIDEKICK_SYSTEM_PROMPT } from "./features/magic-context/sidekick/agent";
+import { recordToolDefinition } from "./features/magic-context/tool-definition-tokens";
 import {
     COMPARTMENT_AGENT_SYSTEM_PROMPT,
     HISTORIAN_EDITOR_SYSTEM_PROMPT,
@@ -206,6 +207,13 @@ const plugin: Plugin = async (ctx) => {
         }
     }
 
+    // Latch: remembers the {providerID, modelID, agentName} from the most
+    // recent `chat.message` so we can attribute `tool.definition` hook fires
+    // to a key. The hook input only carries `toolID`, and `registry.tools()`
+    // runs right after `chat.message` in OpenCode's prompt flow, so this
+    // captures the correct owner for each flight.
+    let lastChatContext: { providerID: string; modelID: string; agentName: string } | null = null;
+
     return {
         tool: tools,
         event: createEventHandler({ magicContext: hooks.magicContext }),
@@ -219,7 +227,40 @@ const plugin: Plugin = async (ctx) => {
             await hooks.magicContext?.["command.execute.before"]?.(input, output);
         },
         "chat.message": async (input, _output) => {
+            // Update tool-def measurement latch before delegating to magic-context
+            // hooks. `registry.tools()` is invoked right after chat.message inside
+            // OpenCode's prompt flow (see session/prompt.ts), so by the time
+            // `tool.definition` fires we'll have the correct {provider, model, agent}.
+            const typed = input as {
+                model?: { providerID?: string; modelID?: string };
+                agent?: string;
+            };
+            const provId = typed.model?.providerID;
+            const modId = typed.model?.modelID;
+            const agent = typed.agent;
+            if (provId && modId && agent) {
+                lastChatContext = { providerID: provId, modelID: modId, agentName: agent };
+            }
             await hooks.magicContext?.["chat.message"]?.(input);
+        },
+        "tool.definition": async (input, output) => {
+            // Attribute tool schema tokens to the most recent chat-message context.
+            // If no chat.message has fired yet in this process (e.g. a subagent
+            // flight that reuses a historian/dreamer/sidekick agent whose
+            // chat.message preceded plugin init), skip — the measurement will
+            // land correctly on the next flight.
+            if (!lastChatContext) return;
+            const typedInput = input as { toolID?: string };
+            const typedOutput = output as { description?: unknown; parameters?: unknown };
+            if (!typedInput.toolID) return;
+            recordToolDefinition(
+                lastChatContext.providerID,
+                lastChatContext.modelID,
+                lastChatContext.agentName,
+                typedInput.toolID,
+                typeof typedOutput.description === "string" ? typedOutput.description : "",
+                typedOutput.parameters,
+            );
         },
         "tool.execute.after": async (input, output) => {
             void output;

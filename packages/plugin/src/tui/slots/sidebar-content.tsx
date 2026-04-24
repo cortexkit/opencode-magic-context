@@ -23,11 +23,17 @@ function relativeTime(ms: number): string {
 
 // Token breakdown segment colors (hardcoded hex values)
 const COLORS = {
-    system: "#c084fc",    // Purple-ish
-    compartments: "#60a5fa", // Blue-ish
-    facts: "#fbbf24",     // Yellow/orange
-    memories: "#34d399",  // Green
-    conversation: "#9ca3af", // Gray (will use theme.textMuted)
+    // Cool / structured — injected by the plugin into message[0]
+    system: "#c084fc", // Purple
+    compartments: "#60a5fa", // Blue
+    facts: "#fbbf24", // Yellow/orange
+    memories: "#34d399", // Green
+    // Warm / user-facing — regular chat and tool traffic. Grouped visually
+    // by hue family so the user reads them as a related block.
+    conversation: "#f87171", // Red
+    toolCalls: "#fb923c", // Orange
+    toolDefs: "#f472b6", // Pink
+    overhead: "#9ca3af", // Gray — catch-all residual
 }
 
 interface TokenSegment {
@@ -95,7 +101,7 @@ const TokenBreakdown = (props: {
             result.push({
                 key: "conv",
                 tokens: s.conversationTokens,
-                color: props.theme.textMuted,
+                color: COLORS.conversation,
                 label: "Conversation",
             })
         }
@@ -106,19 +112,35 @@ const TokenBreakdown = (props: {
             result.push({
                 key: "tool-calls",
                 tokens: s.toolCallTokens,
-                color: "#6b7280",
+                color: COLORS.toolCalls,
                 label: "Tool Calls",
             })
         }
 
-        // Tool Definitions = tool schemas sent separately by OpenCode
-        // (residual: inputTokens - system - messagesBlock - toolCalls)
+        // Tool Definitions = measured description + JSON-schema parameters for
+        // each tool OpenCode sends in the `tools` request parameter, populated
+        // by the `tool.definition` plugin hook keyed by {provider, model, agent}.
+        // Zero until the first turn measures the active agent's tool set.
         if (s.toolDefinitionTokens > 0) {
             result.push({
                 key: "tool-defs",
                 tokens: s.toolDefinitionTokens,
-                color: COLORS.conversation,
-                label: "Tool Defs + Overhead",
+                color: COLORS.toolDefs,
+                label: "Tool Defs",
+            })
+        }
+
+        // Overhead = residual between input tokens and everything measured above.
+        // Captures provider-side JSON wrapping around the tools array,
+        // tool_choice/cache-control markers, and tokenizer imprecision. Before
+        // the first turn's tool.definition measurement lands, the real tool
+        // schema cost also shows up here.
+        if (s.overheadTokens > 0) {
+            result.push({
+                key: "overhead",
+                tokens: s.overheadTokens,
+                color: COLORS.overhead,
+                label: "Overhead",
             })
         }
 

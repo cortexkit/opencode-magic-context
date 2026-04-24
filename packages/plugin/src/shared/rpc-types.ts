@@ -36,13 +36,23 @@ export interface SidebarSnapshot {
      */
     toolCallTokens: number;
     /**
-     * Token estimate of tool schemas OpenCode sends alongside in the request
-     * `tools` parameter (bash, edit, grep, MCP servers, ctx_* tools, etc.).
-     * Computed as inputTokens − systemPromptTokens − messagesBlock −
-     * toolCallTokens and clamped to ≥ 0. Display layer shows this as
-     * "Tool Definitions". Includes tokenizer imprecision residual.
+     * Measured token cost of tool schemas (description + JSON-schema
+     * parameters) OpenCode sends in the request `tools` parameter. Populated
+     * by the `tool.definition` plugin hook, keyed by
+     * `{providerID, modelID, agentName}`. Zero until the first turn after
+     * plugin startup measures the current agent's tool set. Display layer
+     * shows this as "Tool Definitions".
      */
     toolDefinitionTokens: number;
+    /**
+     * Residual catch-all: provider-side wrapping not captured elsewhere —
+     * the JSON envelope around the `tools` array, tool-choice fields,
+     * provider-specific cache-control markers, tokenizer imprecision, etc.
+     * Computed as `inputTokens − systemPromptTokens − messagesBlock −
+     * toolCallTokens − toolDefinitionTokens` and clamped to ≥ 0. Display
+     * layer shows this as "Overhead".
+     */
+    overheadTokens: number;
 }
 
 export interface StatusDetail extends SidebarSnapshot {
