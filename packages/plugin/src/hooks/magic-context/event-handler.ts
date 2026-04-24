@@ -213,6 +213,23 @@ export function createEventHandler(deps: EventHandlerDeps) {
                 if (!detection.isOverflow) {
                     return;
                 }
+                // Subagents cannot recover from overflow themselves — the
+                // transform-side emergency path (`needs_emergency_recovery` →
+                // 95% → historian) is gated by `fullFeatureMode` and skips
+                // subagents anyway. Recording the flag would just leave
+                // orphan state that nothing ever consumes, and if the session
+                // were ever re-classified as a primary it would silently
+                // trigger unwarranted emergency recovery. The overflow error
+                // still propagates to OpenCode / the parent agent through the
+                // normal event pipeline; that's the right recovery surface.
+                const sessionMeta = getOrCreateSessionMeta(deps.db, errInfo.sessionID);
+                if (sessionMeta.isSubagent) {
+                    sessionLog(
+                        errInfo.sessionID,
+                        `overflow detected on subagent: reportedLimit=${detection.reportedLimit ?? "unknown"} pattern=${detection.matchedPattern ?? "n/a"} — skipping recovery flag (subagents cannot run historian)`,
+                    );
+                    return;
+                }
                 const existing = getOverflowState(deps.db, errInfo.sessionID);
                 recordOverflowDetected(deps.db, errInfo.sessionID, detection.reportedLimit);
                 sessionLog(
@@ -258,16 +275,30 @@ export function createEventHandler(deps: EventHandlerDeps) {
             // errors to the assistant message itself in addition to emitting
             // session.error. Checking both ensures we catch the error no
             // matter which event arrives first or fails to arrive at all.
+            // Same subagent skip as the session.error path — subagents have
+            // no emergency recovery machinery that can consume this flag.
             if (info.error !== undefined && info.error !== null) {
                 const detection = detectOverflow(info.error);
                 if (detection.isOverflow) {
                     try {
-                        recordOverflowDetected(deps.db, info.sessionID, detection.reportedLimit);
-                        sessionLog(
-                            info.sessionID,
-                            `overflow detected via message.updated: reportedLimit=${detection.reportedLimit ?? "unknown"} pattern=${detection.matchedPattern ?? "n/a"}`,
-                        );
-                        deps.onSessionCacheInvalidated?.(info.sessionID);
+                        const metaForOverflow = getOrCreateSessionMeta(deps.db, info.sessionID);
+                        if (metaForOverflow.isSubagent) {
+                            sessionLog(
+                                info.sessionID,
+                                `overflow detected on subagent via message.updated: reportedLimit=${detection.reportedLimit ?? "unknown"} pattern=${detection.matchedPattern ?? "n/a"} — skipping recovery flag`,
+                            );
+                        } else {
+                            recordOverflowDetected(
+                                deps.db,
+                                info.sessionID,
+                                detection.reportedLimit,
+                            );
+                            sessionLog(
+                                info.sessionID,
+                                `overflow detected via message.updated: reportedLimit=${detection.reportedLimit ?? "unknown"} pattern=${detection.matchedPattern ?? "n/a"}`,
+                            );
+                            deps.onSessionCacheInvalidated?.(info.sessionID);
+                        }
                     } catch (error) {
                         sessionLog(
                             info.sessionID,
