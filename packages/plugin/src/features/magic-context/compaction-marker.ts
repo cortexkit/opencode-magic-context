@@ -70,6 +70,78 @@ function getOpenCodeDbPath(): string {
 
 let cachedWriteDb: { path: string; db: Database } | null = null;
 
+// Columns we INSERT into OpenCode's `message` and `part` tables. Kept in sync
+// with the INSERT statements in injectCompactionMarker() below. If OpenCode
+// ever renames/drops any of these columns, our INSERTs will fail at runtime —
+// the schema probe below detects that BEFORE we try to write, so we fail
+// cleanly instead of leaving half-written marker state in OpenCode's DB.
+const REQUIRED_MESSAGE_COLUMNS = ["id", "session_id", "time_created", "time_updated", "data"];
+const REQUIRED_PART_COLUMNS = [
+    "id",
+    "message_id",
+    "session_id",
+    "time_created",
+    "time_updated",
+    "data",
+];
+
+/**
+ * Cache of schema-compatibility probe results per DB path.
+ * null = not yet probed, true = compatible, false = incompatible (bail).
+ */
+let cachedSchemaCompatible: { path: string; compatible: boolean } | null = null;
+
+/**
+ * Probe OpenCode's `message` and `part` tables to verify they have the exact
+ * columns our INSERTs reference. OpenCode uses Drizzle migrations and has
+ * already shipped several schema updates; any future rename or column drop
+ * would make our write silently fail at runtime. Probing once per cached-db
+ * lifetime (startup + process restart) keeps the hot path cost at zero after
+ * the first call.
+ */
+function isOpenCodeSchemaCompatible(db: Database, dbPath: string): boolean {
+    if (cachedSchemaCompatible?.path === dbPath) {
+        return cachedSchemaCompatible.compatible;
+    }
+
+    try {
+        const messageCols = new Set(
+            (db.prepare("PRAGMA table_info(message)").all() as Array<{ name?: string }>)
+                .map((r) => r.name ?? "")
+                .filter((n) => n.length > 0),
+        );
+        const partCols = new Set(
+            (db.prepare("PRAGMA table_info(part)").all() as Array<{ name?: string }>)
+                .map((r) => r.name ?? "")
+                .filter((n) => n.length > 0),
+        );
+
+        const missingMessage = REQUIRED_MESSAGE_COLUMNS.filter((c) => !messageCols.has(c));
+        const missingPart = REQUIRED_PART_COLUMNS.filter((c) => !partCols.has(c));
+
+        if (missingMessage.length > 0 || missingPart.length > 0) {
+            log(
+                `[magic-context] compaction-marker: OpenCode DB schema missing required columns ` +
+                    `(message: [${missingMessage.join(", ")}], part: [${missingPart.join(", ")}]). ` +
+                    `Marker injection disabled for this process. ` +
+                    `This usually means OpenCode was updated and magic-context is out of date.`,
+            );
+            cachedSchemaCompatible = { path: dbPath, compatible: false };
+            return false;
+        }
+
+        cachedSchemaCompatible = { path: dbPath, compatible: true };
+        return true;
+    } catch (error) {
+        log(
+            `[magic-context] compaction-marker: schema probe failed: ${error instanceof Error ? error.message : String(error)}. ` +
+                `Marker injection disabled until next process restart.`,
+        );
+        cachedSchemaCompatible = { path: dbPath, compatible: false };
+        return false;
+    }
+}
+
 function getWritableOpenCodeDb(): Database {
     const dbPath = getOpenCodeDbPath();
     if (cachedWriteDb?.path === dbPath) {
@@ -99,6 +171,9 @@ export function closeCompactionMarkerDb(): void {
         }
         cachedWriteDb = null;
     }
+    // Reset the schema-probe cache too — next open may be a different process
+    // or a different opencode.db path (e.g. test isolation via XDG_DATA_HOME).
+    cachedSchemaCompatible = null;
 }
 
 // ── Boundary User Message Resolution ─────────────────────────────
@@ -121,26 +196,24 @@ export function findBoundaryUserMessage(
 ): BoundaryUserMessage | null {
     const db = getWritableOpenCodeDb();
 
+    // Filter out our own injected summary messages (summary=true AND finish="stop")
+    // in SQL using json_extract — matches readRawSessionMessagesFromDb's filter so
+    // ordinals stay parity-correct. Avoids O(N) JSON.parse in JS for sessions with
+    // thousands of messages. COALESCE handles rows missing the fields.
     const rows = db
         .prepare(
-            "SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created ASC, id ASC",
+            `SELECT id, time_created, data
+             FROM message
+             WHERE session_id = ?
+               AND NOT (COALESCE(json_extract(data, '$.summary'), 0) = 1
+                        AND COALESCE(json_extract(data, '$.finish'), '') = 'stop')
+             ORDER BY time_created ASC, id ASC
+             LIMIT ?`,
         )
-        .all(sessionId) as Array<{ id: string; time_created: number; data: string }>;
-
-    // Filter out our own injected summary messages to keep ordinal parity
-    const filtered = rows.filter((row) => {
-        try {
-            const info = JSON.parse(row.data);
-            return !(info.summary === true && info.finish === "stop");
-        } catch {
-            return true;
-        }
-    });
+        .all(sessionId, endOrdinal) as Array<{ id: string; time_created: number; data: string }>;
 
     let bestMatch: BoundaryUserMessage | null = null;
-
-    for (let i = 0; i < filtered.length && i < endOrdinal; i++) {
-        const row = filtered[i];
+    for (const row of rows) {
         try {
             const info = JSON.parse(row.data);
             if (info.role === "user") {
@@ -186,6 +259,15 @@ export interface InjectCompactionMarkerArgs {
 export function injectCompactionMarker(
     args: InjectCompactionMarkerArgs,
 ): CompactionMarkerState | null {
+    // Verify OpenCode's schema still matches what our INSERTs expect BEFORE we
+    // try to write. If OpenCode shipped a breaking schema change, bail cleanly
+    // instead of half-writing marker state that'd leave the session's history
+    // in an inconsistent state.
+    const db = getWritableOpenCodeDb();
+    if (!isOpenCodeSchemaCompatible(db, getOpenCodeDbPath())) {
+        return null;
+    }
+
     const boundary = findBoundaryUserMessage(args.sessionId, args.endOrdinal);
     if (!boundary) {
         log(
@@ -193,8 +275,6 @@ export function injectCompactionMarker(
         );
         return null;
     }
-
-    const db = getWritableOpenCodeDb();
     // Use timestamps relative to the boundary so sort order is consistent
     const boundaryTime = boundary.timeCreated;
 
