@@ -48,15 +48,21 @@ Keep using the **same session** for **weeks**, **months**, or even **years**. **
 
 ---
 
-### ✨ New Features Graduated in v0.14
+### ✨ Recent Highlights
 
-**User Memories** — now enabled by default under `dreamer.user_memories`. Historian extracts behavioral observations about you alongside its normal compartment output (communication style, expertise level, review focus, working patterns). Recurring observations are promoted by the dreamer to stable user memories that appear in all sessions via `<user-profile>`. Set `dreamer.user_memories.enabled: false` to opt out. Requires dreamer.
+**Subagents now self-manage context (v0.15)** — subagent sessions (historian, dreamer, Athena council members, any `mode: "subagent"` agent) now run age-based tool drops, reasoning clearing, and structural stripping at the execute threshold — the same way primary sessions with `ctx_reduce_enabled: false` behave. Previously they had no automatic reduction and grew silently until overflow. Nudges, historian/compartment runs, and the `<session-history>` block remain primary-only — subagents stay lean and parent-driven.
 
-**Key File Pinning** — now under `dreamer.pin_key_files`, still opt-in. Dreamer analyzes which files your agent reads most frequently across the session. Core orientation files (architecture, config, types) that get re-read after every context drop are pinned into the system prompt as `<key-files>`, so the agent always has them without needing to re-read from disk. Files are read fresh on each cache-busting pass. Enable with `dreamer.pin_key_files.enabled: true`.
+**Lean sessions when `ctx_reduce_enabled: false` (v0.15)** — when you opt out of agent-driven reduction, the `§N§` tag prefix on user/assistant text and tool output is no longer injected, saving several thousand tokens per long session. The injected prompt guidance also switches to the no-reduce variant so the agent isn't told about a tool it can't use. DB tag records still exist (heuristic cleanup, persistence, and replay all depend on them); only the agent-visible prefix is skipped.
+
+**User Memories (v0.14)** — enabled by default under `dreamer.user_memories`. Historian extracts behavioral observations about you alongside its normal compartment output (communication style, expertise level, review focus, working patterns). Recurring observations are promoted by the dreamer to stable user memories that appear in all sessions via `<user-profile>`. Set `dreamer.user_memories.enabled: false` to opt out. Requires dreamer.
+
+**Key File Pinning (v0.14)** — under `dreamer.pin_key_files`, still opt-in. Dreamer analyzes which files your agent reads most frequently across the session. Core orientation files (architecture, config, types) that get re-read after every context drop are pinned into the system prompt as `<key-files>`, so the agent always has them without needing to re-read from disk. Files are read fresh on each cache-busting pass. Enable with `dreamer.pin_key_files.enabled: true`.
 
 > Migrating from an earlier version? Running `bunx --bun @cortexkit/opencode-magic-context@latest doctor` rewrites old `experimental.user_memories.*` and `experimental.pin_key_files.*` keys into their new `dreamer.*` homes, preserving any `enabled` state you had.
 
 ### 🧪 New Experimental Features
+
+**Age-tier caveman text compression (v0.15)** — opt-in companion to `ctx_reduce_enabled: false`. Older user/assistant text parts are progressively compressed using deterministic [caveman rules](https://github.com/cortexkit/opencode-magic-context/blob/master/packages/plugin/src/hooks/magic-context/caveman.ts) — the oldest 20% go to ultra-compressed, next 20% to full, next 20% to lite, newest 40% untouched. Tier shifts always recompress from the pristine original, never from an already-cavemaned intermediate, so the result is stable across passes. Cache-safe by design. Enable with `experimental.caveman_text_compression: { enabled: true }`. Only active when `ctx_reduce_enabled: false`.
 
 **Temporal Awareness** — gives the agent real-time perception. Each user message gets a small `<!-- +5m -->`/`<!-- +2h 15m -->`/`<!-- +3d 4h -->` gap marker showing time since the previous message, and every compartment in `<session-history>` carries `start-date`/`end-date` attributes. Lets the agent reason correctly about how long a build ran, when a decision was made, or how stale a prior session is. Cache-safe — markers derive from immutable timestamps. Enable with `experimental.temporal_awareness: true`.
 
@@ -161,7 +167,7 @@ Use `--force` to force-clear the plugin cache even when versions match (fixes br
 bunx --bun @cortexkit/opencode-magic-context@latest doctor --force
 ```
 
-Hit a real bug? Use `--issue` to collect environment, sanitized config, and the last 200 log lines into a ready-to-submit report. It can also open the issue directly via `gh` if you have it installed:
+Hit a real bug? Use `--issue` to collect environment, sanitized config, and the last 400 log lines into a ready-to-submit report. It can also open the issue directly via `gh` if you have it installed:
 
 ```bash
 bunx --bun @cortexkit/opencode-magic-context@latest doctor --issue
@@ -272,7 +278,7 @@ A **separate compressor** pass fires when the rendered history block exceeds the
 
 ### Nudging
 
-As context usage grows, Magic Context sends rolling reminders suggesting the agent reduce. Cadence tightens as usage approaches the threshold — from gentle reminders to urgent warnings. If the agent recently called `ctx_reduce`, reminders are suppressed. An emergency nudge at 80% always fires.
+As context usage grows, Magic Context sends rolling reminders suggesting the agent reduce. Cadence tightens as usage approaches the threshold — from gentle reminders to urgent warnings. If the agent recently called `ctx_reduce`, reminders are suppressed. At 85% Magic Context force-materializes queued drops and emergency cleanup; at 95% it blocks the turn until background historian completes.
 
 ### Cross-session memory
 
@@ -308,7 +314,7 @@ Stable user memories are visible and manageable in the dashboard's User Memories
 
 When running in OpenCode's terminal UI, Magic Context shows a live sidebar panel with:
 
-- **Context breakdown bar** — visual token split across System Prompt, Compartments, Facts, Memories, and Conversation
+- **Context breakdown bar** — visual token split across System Prompt, Compartments, Facts, Memories, Conversation, Tool Calls, Tool Definitions (measured from the `tool.definition` hook), and Overhead. Cool palette for structured injections, warm palette for user/tool traffic.
 - **Historian status** — idle, running, or compartment/fact counts
 - **Memory counts** — total project memories and how many are injected
 - **Dreamer status** — last run time
