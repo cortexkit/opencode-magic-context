@@ -37,7 +37,10 @@ export interface TestHarnessOptions {
 
 export interface SdkClient {
     session: {
-        create: (opts: { query: { directory: string } }) => Promise<{ data?: { id: string } }>;
+        create: (opts: {
+            query: { directory: string };
+            body?: { parentID?: string; title?: string };
+        }) => Promise<{ data?: { id: string } }>;
         prompt: (opts: {
             path: { id: string };
             body: {
@@ -104,6 +107,66 @@ export class TestHarness {
             );
         }
         return res.data.id;
+    }
+
+    /**
+     * Create a child session (subagent) with the given parent. Mirrors what
+     * OpenCode's `task` tool does internally: posts to /session with a
+     * `parentID` body. The plugin's event-handler reads `parentID` from the
+     * `session.created` event and marks the row `isSubagent=true`.
+     *
+     * Use this to drive subagent-specific behavior: reduced feature mode,
+     * heuristic cleanup without historian, no 85%/95% emergency paths, no
+     * nudges, no §N§ prefix injection.
+     */
+    async createChildSession(parentId: string, title?: string): Promise<string> {
+        const res = await this.client.session.create({
+            query: { directory: this.opencode.env.workdir },
+            body: { parentID: parentId, ...(title ? { title } : {}) },
+        });
+        if (!res.data) {
+            throw new Error(
+                `child session.create failed. stderr:\n${this.opencode.stderr()}\nstdout:\n${this.opencode.stdout()}`,
+            );
+        }
+        return res.data.id;
+    }
+
+    /**
+     * Read the persisted `isSubagent` flag for a session from context.db.
+     * Returns null if the session_meta row doesn't exist yet (plugin may not
+     * have processed the `session.created` event yet — wait with `waitFor`).
+     */
+    isSubagent(sessionId: string): boolean | null {
+        try {
+            const db = this.contextDb();
+            const row = db
+                .prepare("SELECT is_subagent FROM session_meta WHERE session_id = ?")
+                .get(sessionId) as { is_subagent: number } | null;
+            if (!row) return null;
+            return row.is_subagent === 1;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Count tags in a specific status for a session. Status is one of
+     * "active" | "dropped" (magic-context's TagStatus). Useful for
+     * verifying heuristic cleanup actually dropped tool tags.
+     */
+    countTagsByStatus(sessionId: string, status: string): number {
+        try {
+            const db = this.contextDb();
+            const row = db
+                .prepare(
+                    "SELECT COUNT(*) AS n FROM tags WHERE session_id = ? AND status = ?",
+                )
+                .get(sessionId, status) as { n: number } | null;
+            return row?.n ?? 0;
+        } catch {
+            return 0;
+        }
     }
 
     /**
