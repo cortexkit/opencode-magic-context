@@ -359,14 +359,16 @@ export function createSystemPromptHashHandler(deps: {
         // causing precision loss on read-back and infinite hash-change flushes.
         const currentHash = new Bun.CryptoHasher("md5").update(systemContent).digest("hex");
 
-        let sessionMeta: import("../../features/magic-context/types").SessionMeta | undefined;
-        try {
-            sessionMeta = getOrCreateSessionMeta(deps.db, sessionId);
-        } catch (error) {
-            sessionLog(sessionId, "system-prompt-hash DB update failed:", error);
+        // Reuse sessionMetaEarly from Step 1 — no code path between that read
+        // and here mutates session_meta for this session, so a second DB read
+        // would return identical data. If Step 1's read failed (sessionMetaEarly
+        // is undefined), bail rather than re-attempting: we already logged the
+        // error and can't make an informed hash-change decision without the
+        // previous hash.
+        if (!sessionMetaEarly) {
             return;
         }
-
+        const sessionMeta = sessionMetaEarly;
         const previousHash = sessionMeta.systemPromptHash;
         if (previousHash !== "" && previousHash !== "0" && previousHash !== currentHash) {
             sessionLog(
