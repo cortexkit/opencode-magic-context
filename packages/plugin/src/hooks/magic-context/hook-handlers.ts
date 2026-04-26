@@ -8,6 +8,7 @@ import {
     updateSessionMeta,
 } from "../../features/magic-context/storage-meta";
 import { clearHistorianFailureState } from "../../features/magic-context/storage-meta-persisted";
+import { clearSidebarSnapshotCache } from "../../plugin/sidebar-snapshot-cache";
 import type { PluginContext } from "../../plugin/types";
 import { sessionLog } from "../../shared/logger";
 import { clearAutoSearchForSession } from "./auto-search-runner";
@@ -271,6 +272,7 @@ export function createEventHook(args: {
             args.commitSeenLastPass?.delete(sessionId);
             clearNoteNudgeState(args.db, sessionId);
             clearAutoSearchForSession(sessionId);
+            clearSidebarSnapshotCache(sessionId);
         }
 
         // Historical note: v0.14.1 removed the 80% "context emergency" nudge

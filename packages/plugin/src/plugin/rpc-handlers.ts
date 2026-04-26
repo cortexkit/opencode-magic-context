@@ -11,10 +11,15 @@ import { resolveExecuteThresholdDetail } from "../hooks/magic-context/event-reso
 import { getLiveNotificationParams } from "../hooks/magic-context/hook-handlers";
 import type { LiveSessionState } from "../hooks/magic-context/live-session-state";
 import { estimateTokens } from "../hooks/magic-context/read-session-formatting";
+import {
+    calibrateBuckets,
+    resolveModelCalibration,
+} from "../hooks/magic-context/tokenizer-calibration";
 import { log } from "../shared/logger";
 import { drainNotifications } from "../shared/rpc-notifications";
 import type { MagicContextRpcServer } from "../shared/rpc-server";
 import type { SidebarSnapshot, StatusDetail } from "../shared/rpc-types";
+import { applyStickySnapshotCache } from "./sidebar-snapshot-cache";
 
 function getDb(): Database | null {
     try {
@@ -91,7 +96,6 @@ function buildSidebarSnapshot(
         conversationTokens: 0,
         toolCallTokens: 0,
         toolDefinitionTokens: 0,
-        overheadTokens: 0,
     };
 
     try {
@@ -238,58 +242,62 @@ function buildSidebarSnapshot(
             }
         }
 
-        // Display-layer attribution. Four measured-ish buckets + one residual:
-        //   messagesBlockTokens (conversation_tokens in session_meta)
-        //     = text + reasoning + image parts from output.messages[]. Includes
-        //       the injected <session-history> block in message[0].
-        //   toolCallTokensRaw (tool_call_tokens in session_meta)
-        //     = tool_use/tool_result/tool/tool-invocation parts in messages.
-        //   measuredToolDefTokens (tool.definition plugin hook)
-        //     = description + JSON-schema parameters for each tool OpenCode
-        //       sends in the `tools` request parameter, keyed by
-        //       {providerID, modelID, agentName}. Zero until the first turn
-        //       after plugin startup measures the active agent's tool set.
-        //   overheadTokens (residual)
-        //     = input − everything-above. Captures provider-side JSON envelope
-        //       around the tools array, tool_choice, cache-control markers,
-        //       and tokenizer imprecision.
+        // Display-layer attribution.
         //
-        // We strip injected compartments/facts/memories out of messagesBlockTokens
-        // because those are rendered by the plugin into message[0] text content
-        // and we want "Conversation" to reflect real user/assistant dialog only.
+        // Local raw counts come from ai-tokenizer. Per-model calibration in
+        // tokenizer-calibration.ts captures the empirically-measured drift
+        // between local raw counts and the API's actual token counts (varies
+        // significantly across providers and model generations). We:
+        //   1. scale stable buckets (system, tool defs) by per-model ratios,
+        //   2. compute the dynamic remainder as inputTokens - calibrated_stable,
+        //   3. proportionally distribute the remainder to dynamic buckets so
+        //      they sum to exactly inputTokens. Overhead becomes 0.
+        //
+        // messagesBlockTokens persisted by transform.ts includes the injected
+        // <session-history> block (compartments + facts + memories live in
+        // message[0]). Subtract those so "conversationLocal" reflects real
+        // user/assistant dialog only.
         const injectedInMessages = compartmentTokens + factTokens + memoryTokens;
-        const conversationTokens = Math.max(0, messagesBlockTokens - injectedInMessages);
-        const toolCallTokens = Math.max(0, toolCallTokensRaw);
+        const conversationLocal = Math.max(0, messagesBlockTokens - injectedInMessages);
+        const toolCallsLocal = Math.max(0, toolCallTokensRaw);
 
         // Measured tool schema cost. Resolved via the live-session-state latch
         // (session → agent/model). When the plugin hasn't fired tool.definition
         // yet for this session's current agent+model (brand-new session before
-        // first turn, or post-restart before any flight), returns 0 and all the
-        // tool-def cost shows up in overhead until the measurement lands.
+        // first turn, or post-restart before any flight), returns 0 and tool
+        // defs are excluded from calibration until the measurement lands.
         let measuredToolDefTokens = 0;
+        let activeProviderID: string | undefined;
+        let activeModelID: string | undefined;
         if (liveSessionState) {
             const model = liveSessionState.liveModelBySession.get(sessionId);
             const agent = liveSessionState.agentBySession.get(sessionId);
             if (model) {
+                activeProviderID = model.providerID;
+                activeModelID = model.modelID;
                 measuredToolDefTokens =
                     getMeasuredToolDefinitionTokens(model.providerID, model.modelID, agent) ?? 0;
             }
         }
-        const toolDefinitionTokens = measuredToolDefTokens;
-        const overheadTokens = Math.max(
-            0,
-            inputTokens -
-                systemPromptTokens -
-                messagesBlockTokens -
-                toolCallTokens -
-                measuredToolDefTokens,
-        );
 
-        return {
+        const calibration = resolveModelCalibration(activeProviderID, activeModelID);
+        const calibrated = calibrateBuckets({
+            inputTokens,
+            systemLocal: systemPromptTokens,
+            toolDefsLocal: measuredToolDefTokens,
+            compartmentsLocal: compartmentTokens,
+            factsLocal: factTokens,
+            memoriesLocal: memoryTokens,
+            conversationLocal,
+            toolCallsLocal,
+            calibration,
+        });
+
+        const fresh: SidebarSnapshot = {
             sessionId,
             usagePercentage,
             inputTokens,
-            systemPromptTokens,
+            systemPromptTokens: calibrated.systemTokens,
             compartmentCount,
             factCount,
             memoryCount,
@@ -302,14 +310,18 @@ function buildSidebarSnapshot(
             cacheTtl,
             lastDreamerRunAt,
             projectIdentity,
-            compartmentTokens,
-            factTokens,
-            memoryTokens,
-            conversationTokens,
-            toolCallTokens,
-            toolDefinitionTokens,
-            overheadTokens,
+            compartmentTokens: calibrated.compartmentTokens,
+            factTokens: calibrated.factTokens,
+            memoryTokens: calibrated.memoryTokens,
+            conversationTokens: calibrated.conversationTokens,
+            toolCallTokens: calibrated.toolCallTokens,
+            toolDefinitionTokens: calibrated.toolDefinitionTokens,
         };
+        // Defensive sticky cache: if `inputTokens` briefly drops to 0 mid-turn
+        // (intermittent — possibly streaming events with empty token shape, or
+        // first-pass reset firing on existing-session messages), serve the
+        // last good breakdown instead of letting the bar flicker.
+        return applyStickySnapshotCache(sessionId, fresh);
     } catch (err) {
         log("[rpc] sidebar-snapshot error:", err);
         return empty;

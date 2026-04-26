@@ -44,15 +44,6 @@ export interface SidebarSnapshot {
      * shows this as "Tool Definitions".
      */
     toolDefinitionTokens: number;
-    /**
-     * Residual catch-all: provider-side wrapping not captured elsewhere —
-     * the JSON envelope around the `tools` array, tool-choice fields,
-     * provider-specific cache-control markers, tokenizer imprecision, etc.
-     * Computed as `inputTokens − systemPromptTokens − messagesBlock −
-     * toolCallTokens − toolDefinitionTokens` and clamped to ≥ 0. Display
-     * layer shows this as "Overhead".
-     */
-    overheadTokens: number;
 }
 
 export interface StatusDetail extends SidebarSnapshot {

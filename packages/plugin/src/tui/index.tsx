@@ -219,7 +219,6 @@ const StatusDialog = (props: { api: TuiPluginApi; s: StatusDetail }) => {
         conversation: "#f87171",
         toolCalls: "#fb923c",
         toolDefs: "#f472b6",
-        overhead: "#9ca3af",
     }
 
     const breakdownSegments = () => {
@@ -257,8 +256,6 @@ const StatusDialog = (props: { api: TuiPluginApi; s: StatusDetail }) => {
             segs.push({ label: "Tool Calls", tokens: d.toolCallTokens, color: COLORS.toolCalls })
         if (d.toolDefinitionTokens > 0)
             segs.push({ label: "Tool Defs", tokens: d.toolDefinitionTokens, color: COLORS.toolDefs })
-        if (d.overheadTokens > 0)
-            segs.push({ label: "Overhead", tokens: d.overheadTokens, color: COLORS.overhead })
 
         return { segs, total }
     }

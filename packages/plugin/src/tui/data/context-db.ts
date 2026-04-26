@@ -51,26 +51,83 @@ const EMPTY_SNAPSHOT: SidebarSnapshot = {
     conversationTokens: 0,
     toolCallTokens: 0,
     toolDefinitionTokens: 0,
-    overheadTokens: 0,
 };
+
+/**
+ * Per-session client-side sticky cache. Mirrors the server-side cache in
+ * `sidebar-snapshot-cache.ts` but covers the cases the server can't:
+ *   - RPC call fails entirely (timeout, abort, parse error) → server is never reached
+ *   - RPC server is not yet up (port file missing, retries exhausted)
+ *   - Server returns an error envelope
+ *
+ * In all three cases the breakdown bar would otherwise disappear until the
+ * next successful refresh. With this cache, the client returns the most
+ * recent good snapshot for the same session so the UI stays stable through
+ * transient RPC blips. 5-minute staleness ceiling keeps it from showing
+ * obviously old data after long disconnects.
+ */
+interface CachedSnapshot {
+    snapshot: SidebarSnapshot;
+    cachedAt: number;
+}
+const STICKY_TTL_MS = 5 * 60 * 1000;
+const STICKY_MAX_ENTRIES = 100;
+const stickySidebarCache = new Map<string, CachedSnapshot>();
+
+function rememberSidebarSnapshot(snapshot: SidebarSnapshot): void {
+    if (!snapshot.sessionId || snapshot.inputTokens <= 0) return;
+    // LRU-style bound: drop the oldest entry once we hit the cap. With a
+    // 5-min TTL most stale entries time out naturally; this just prevents
+    // unbounded growth across many session switches in a long TUI session.
+    if (
+        stickySidebarCache.size >= STICKY_MAX_ENTRIES &&
+        !stickySidebarCache.has(snapshot.sessionId)
+    ) {
+        const firstKey = stickySidebarCache.keys().next().value;
+        if (firstKey) stickySidebarCache.delete(firstKey);
+    }
+    stickySidebarCache.set(snapshot.sessionId, {
+        snapshot,
+        cachedAt: Date.now(),
+    });
+}
+
+function recallSidebarSnapshot(sessionId: string, fallback: SidebarSnapshot): SidebarSnapshot {
+    const cached = stickySidebarCache.get(sessionId);
+    if (!cached) return fallback;
+    if (Date.now() - cached.cachedAt > STICKY_TTL_MS) {
+        stickySidebarCache.delete(sessionId);
+        return fallback;
+    }
+    return cached.snapshot;
+}
 
 /** Fetch sidebar snapshot from the server via RPC. */
 export async function loadSidebarSnapshot(
     sessionId: string,
     directory: string,
 ): Promise<SidebarSnapshot> {
-    if (!rpcClient) return { ...EMPTY_SNAPSHOT, sessionId };
+    const empty: SidebarSnapshot = { ...EMPTY_SNAPSHOT, sessionId };
+    if (!rpcClient) return recallSidebarSnapshot(sessionId, empty);
     try {
         const result = await rpcClient.call<SidebarSnapshot>("sidebar-snapshot", {
             sessionId,
             directory,
         });
         if ((result as unknown as Record<string, unknown>).error) {
-            return { ...EMPTY_SNAPSHOT, sessionId };
+            return recallSidebarSnapshot(sessionId, empty);
         }
+        // Treat zero inputTokens as a transient blip — fall back to last
+        // good snapshot if we have one. The server-side cache already does
+        // the same thing; this layer covers the cases where the call fails
+        // before the server sees it.
+        if (result.inputTokens <= 0) {
+            return recallSidebarSnapshot(sessionId, result);
+        }
+        rememberSidebarSnapshot(result);
         return result;
     } catch {
-        return { ...EMPTY_SNAPSHOT, sessionId };
+        return recallSidebarSnapshot(sessionId, empty);
     }
 }
 

@@ -33,7 +33,6 @@ const COLORS = {
     conversation: "#f87171", // Red
     toolCalls: "#fb923c", // Orange
     toolDefs: "#f472b6", // Pink
-    overhead: "#9ca3af", // Gray — catch-all residual
 }
 
 interface TokenSegment {
@@ -127,20 +126,6 @@ const TokenBreakdown = (props: {
                 tokens: s.toolDefinitionTokens,
                 color: COLORS.toolDefs,
                 label: "Tool Defs",
-            })
-        }
-
-        // Overhead = residual between input tokens and everything measured above.
-        // Captures provider-side JSON wrapping around the tools array,
-        // tool_choice/cache-control markers, and tokenizer imprecision. Before
-        // the first turn's tool.definition measurement lands, the real tool
-        // schema cost also shows up here.
-        if (s.overheadTokens > 0) {
-            result.push({
-                key: "overhead",
-                tokens: s.overheadTokens,
-                color: COLORS.overhead,
-                label: "Overhead",
             })
         }
 
