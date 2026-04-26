@@ -296,7 +296,7 @@ An optional background agent that maintains memory quality overnight:
 - **Improve** — rewrite verbose memories into terse operational form
 - **Maintain docs** — update ARCHITECTURE.md and STRUCTURE.md from codebase changes
 - **Evaluate smart notes** — check pending smart note conditions and surface ready notes
-- **Review user memories** (experimental) — promote recurring user behavior observations to stable memories
+- **Review user memories** — promote recurring user behavior observations to stable memories
 
 The dreamer runs during a configurable schedule window and creates ephemeral OpenCode child sessions for each task. Since it runs during idle time (typically overnight), it works well with local models — even slower ones like `ollama/mlx-qwen3.5-27b-claude-4.6-opus-reasoning-distilled` are fine since there's no user waiting.
 
