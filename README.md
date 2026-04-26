@@ -50,7 +50,7 @@ Keep using the **same session** for **weeks**, **months**, or even **years**. **
 
 ### ✨ Recent Highlights
 
-**Subagents now self-manage context (v0.15)** — subagent sessions (historian, dreamer, Athena council members, any `mode: "subagent"` agent) now run age-based tool drops, reasoning clearing, and structural stripping at the execute threshold — the same way primary sessions with `ctx_reduce_enabled: false` behave. Previously they had no automatic reduction and grew silently until overflow. Nudges, historian/compartment runs, and the `<session-history>` block remain primary-only — subagents stay lean and parent-driven.
+**Subagents now self-manage context (v0.15)** — subagent sessions now run age-based tool drops, reasoning clearing, and structural stripping at the execute threshold — the same way primary sessions with `ctx_reduce_enabled: false` behave. Previously they had no automatic reduction and grew silently until overflow. Nudges, historian/compartment runs, and the `<session-history>` block remain primary-only — subagents stay lean and parent-driven.
 
 **Lean sessions when `ctx_reduce_enabled: false` (v0.15)** — when you opt out of agent-driven reduction, the `§N§` tag prefix on user/assistant text and tool output is no longer injected, saving several thousand tokens per long session. The injected prompt guidance also switches to the no-reduce variant so the agent isn't told about a tool it can't use. DB tag records still exist (heuristic cleanup, persistence, and replay all depend on them); only the agent-visible prefix is skipped.
 
