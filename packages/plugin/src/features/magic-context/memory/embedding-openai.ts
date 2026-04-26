@@ -156,7 +156,30 @@ export class OpenAICompatibleEmbeddingProvider implements EmbeddingProvider {
                 return Array.from({ length: texts.length }, () => null);
             }
 
-            const body = (await response.json()) as EmbeddingResponseBody;
+            // Read body as text first so we can produce useful diagnostics on
+            // empty / malformed responses (LMStudio / Cerebras / Fireworks
+            // sometimes return a 200 status with an empty body when the model
+            // is overloaded or the upstream connection dropped mid-response).
+            const rawBody = await response.text();
+            if (rawBody.trim().length === 0) {
+                log(
+                    `[magic-context] openai-compatible embedding request returned empty body (status=${response.status}, content-type=${response.headers.get("content-type") ?? "none"})`,
+                );
+                this.recordFailure(isProbe);
+                return Array.from({ length: texts.length }, () => null);
+            }
+            let body: EmbeddingResponseBody;
+            try {
+                body = JSON.parse(rawBody) as EmbeddingResponseBody;
+            } catch (parseError) {
+                const snippet = rawBody.slice(0, 200).replace(/\s+/g, " ");
+                log(
+                    `[magic-context] openai-compatible embedding response was not JSON (status=${response.status}, ${rawBody.length}B body, snippet="${snippet}"):`,
+                    parseError instanceof Error ? parseError.message : parseError,
+                );
+                this.recordFailure(isProbe);
+                return Array.from({ length: texts.length }, () => null);
+            }
             const items = Array.isArray(body.data) ? body.data : [];
 
             const results = Array.from({ length: texts.length }, (_, index) => {

@@ -199,4 +199,41 @@ describe("OpenAICompatibleEmbeddingProvider circuit breaker", () => {
         // might be perfectly healthy — caller just gave up.
         expect(provider._getFailureCount()).toBe(0);
     });
+
+    test("treats 200 with empty body as a typed failure (no SyntaxError leak)", async () => {
+        // Real-world LMStudio / Cerebras / Fireworks behavior under load: a
+        // 200 OK with an empty body. Pre-fix, this surfaced as a confusing
+        // `Unexpected end of JSON input` SyntaxError from response.json().
+        fetchSpy.mockImplementation(
+            (async () =>
+                new Response("", {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                })) as FetchLike,
+        );
+
+        const provider = makeProvider();
+        const result = await provider.embed("text");
+        expect(result).toBeNull();
+        // It still counts as a failure for circuit purposes — endpoint is up
+        // but not actually embedding, which is the same operational signal.
+        expect(provider._getFailureCount()).toBe(1);
+    });
+
+    test("treats 200 with non-JSON body as a typed failure (no SyntaxError leak)", async () => {
+        // Some upstream proxies can return an HTML error page with a 200
+        // status. Don't let JSON.parse errors poison the log.
+        fetchSpy.mockImplementation(
+            (async () =>
+                new Response("<html>upstream error</html>", {
+                    status: 200,
+                    headers: { "content-type": "text/html" },
+                })) as FetchLike,
+        );
+
+        const provider = makeProvider();
+        const result = await provider.embed("text");
+        expect(result).toBeNull();
+        expect(provider._getFailureCount()).toBe(1);
+    });
 });
