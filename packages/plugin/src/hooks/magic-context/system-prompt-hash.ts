@@ -430,9 +430,32 @@ export function createSystemPromptHashHandler(deps: {
         // cached as appropriate, sticky date has been updated or frozen,
         // and the hash has been re-evaluated. Future defer passes within
         // the same TTL window MUST hit cached adjunct values to keep the
-        // system-prompt cache prefix stable. Drain even if isCacheBusting
-        // was false — repeat reads of an already-drained set are no-ops.
-        deps.systemPromptRefreshSessions.delete(sessionId);
+        // system-prompt cache prefix stable.
+        //
+        // CRITICAL: drain conditionally on the value captured at the top
+        // of the handler (`isCacheBusting` from line 201). Two distinct
+        // cases hinge on this:
+        //
+        // 1. Flag was already set when handler started → adjuncts were
+        //    refreshed in Step 1.5 above using the live `isCacheBusting`
+        //    value. Signal consumed; drain it.
+        //
+        // 2. Flag was added LATER in Step 3 by hash-change detection
+        //    (lines 401-403) → adjuncts in Step 1.5 used STALE cache
+        //    because `isCacheBusting` was captured before the add.
+        //    The just-added flag must survive to the NEXT pass so
+        //    adjuncts can finally refresh. An unconditional drain here
+        //    would silently drop that signal, leaving adjuncts stale
+        //    forever.
+        //
+        // Early returns at lines 375 / 388 also benefit: they preserve
+        // any pre-existing flag set by `/ctx-flush` or variant change so
+        // the next valid pass can consume it.
+        //
+        // See Oracle review 2026-04-26 Finding A1 for the bug this fixes.
+        if (isCacheBusting) {
+            deps.systemPromptRefreshSessions.delete(sessionId);
+        }
     };
 
     return {

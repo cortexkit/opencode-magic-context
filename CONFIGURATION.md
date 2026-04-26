@@ -350,7 +350,7 @@ Cross-session memory settings. All memories are scoped to the current project (i
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | `boolean` | `true` | Enable cross-session memory. When `false`, the `ctx_memory` and `ctx_search` tools remain available, but no `<project-memory>` block is injected and historian/recomp do not promote any session facts to project memories. |
+| `enabled` | `boolean` | `true` | Enable cross-session memory. When `false`, the `ctx_memory` tool is hidden, no `<project-memory>` block is injected, and historian/recomp do not promote any session facts to project memories. The `ctx_search` tool stays available but its memory source returns no results. |
 | `injection_budget_tokens` | `number` (500–20000) | `4000` | Token budget for memory injection into `<session-history>`. |
 | `auto_promote` | `boolean` | `true` | Promote eligible session facts to project memories automatically after historian or `/ctx-recomp` runs. When `false`, historian and recomp do not write any new memories — agents can still create memories explicitly via `ctx_memory write`, and existing memories continue to be injected and searched normally. |
 | `retrieval_count_promotion_threshold` | `number` | `3` | Retrievals needed before a memory is auto-promoted to permanent. |
