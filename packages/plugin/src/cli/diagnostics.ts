@@ -1,4 +1,11 @@
-import { Database } from "bun:sqlite";
+// NOTE: bun:sqlite is loaded lazily inside collectHistorianFailures() via a
+// runtime-gated dynamic import. A static `import { Database } from "bun:sqlite"`
+// here would crash the CLI under Node — `bunx <pkg> setup` (no --bun) routes
+// to the system Node, and Node's ESM loader throws ERR_UNSUPPORTED_ESM_URL_SCHEME
+// on `bun:` specifiers before any try/catch can intervene. The historian-failure
+// section is best-effort diagnostics; if the DB can't be read (no Bun runtime,
+// missing module, missing context.db, etc.) the report still produces all
+// other useful information.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir, userInfo } from "node:os";
@@ -279,12 +286,64 @@ function collectHistorianDumps(): DiagnosticReport["historianDumps"] {
     }
 }
 
-function collectHistorianFailures(storageDirPath: string): HistorianFailureSummary[] {
+/**
+ * Read the most recent historian-failure rows from session_meta.
+ *
+ * `bun:sqlite` is loaded lazily via a runtime-gated dynamic import so the
+ * CLI works under both Bun and Node:
+ *
+ *   - Under Bun (typeof Bun !== "undefined"): import("bun:sqlite") succeeds
+ *     and we read the failures.
+ *   - Under Node (system `node` from `bunx <pkg> setup`, `npx <pkg> setup`,
+ *     or any `--target node` build path): we never attempt the import, so
+ *     Node's ESM loader doesn't see a `bun:` specifier. The function returns
+ *     `[]` and the rest of the diagnostics report builds normally.
+ *
+ * A static `import { Database } from "bun:sqlite"` at module top would crash
+ * the CLI before any try/catch could catch it: Node throws
+ * `ERR_UNSUPPORTED_ESM_URL_SCHEME` on `bun:` specifiers during module
+ * resolution, which happens before user code runs. The dynamic-import-with-
+ * function-string trick (`new Function(...)`) defeats Bun's static analysis
+ * so the bundler doesn't try to resolve `bun:sqlite` at build time either.
+ */
+async function collectHistorianFailures(
+    storageDirPath: string,
+): Promise<HistorianFailureSummary[]> {
     const contextDbPath = join(storageDirPath, "context.db");
     if (!existsSync(contextDbPath)) return [];
-    let db: Database | null = null;
+
+    // Runtime gate: only attempt the import under Bun. The historian-failure
+    // section is best-effort diagnostics — losing it under Node is acceptable
+    // because the rest of the report (config, conflicts, log tail, dumps)
+    // already gives users and us enough to triage most issues.
+    if (typeof (globalThis as { Bun?: unknown }).Bun === "undefined") {
+        return [];
+    }
+
+    type DatabaseCtor = new (
+        path: string,
+        opts?: { readonly?: boolean },
+    ) => {
+        prepare: (sql: string) => { all: () => unknown[] };
+        close: () => void;
+    };
+
+    let DatabaseClass: DatabaseCtor;
     try {
-        db = new Database(contextDbPath, { readonly: true });
+        // `new Function(...)` defeats the bundler's static-analysis pass so
+        // no resolver tries to load `bun:sqlite` at build time. At runtime
+        // under Bun this resolves to the built-in `bun:sqlite` module.
+        const mod = (await new Function("p", "return import(p)")("bun:sqlite")) as {
+            Database: DatabaseCtor;
+        };
+        DatabaseClass = mod.Database;
+    } catch {
+        return [];
+    }
+
+    let db: { prepare: (sql: string) => { all: () => unknown[] }; close: () => void } | null = null;
+    try {
+        db = new DatabaseClass(contextDbPath, { readonly: true });
         const rows = db
             .prepare(
                 "SELECT session_id, historian_failure_count, historian_last_error, historian_last_failure_at FROM session_meta WHERE historian_failure_count > 0 ORDER BY historian_last_failure_at DESC LIMIT 10",
@@ -367,7 +426,7 @@ export async function collectDiagnostics(): Promise<DiagnosticReport> {
             sizeKb: Math.round(logFileSize / 1024),
         },
         historianDumps: collectHistorianDumps(),
-        historianFailures: collectHistorianFailures(storageDirPath),
+        historianFailures: await collectHistorianFailures(storageDirPath),
     };
 }
 
