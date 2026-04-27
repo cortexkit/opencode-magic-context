@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "bun run --cwd packages/plugin build",
+    "typecheck": "bun run --cwd packages/plugin typecheck",
+    "test": "bun run --cwd packages/plugin test",
+    "test:e2e": "bun run --cwd packages/e2e-tests test",
+    "lint": "bun run --cwd packages/plugin lint",
+    "lint:fix": "bun run --cwd packages/plugin lint:fix",
+    "dev:dashboard": "bun run --cwd packages/dashboard dev"
+  }
+}
