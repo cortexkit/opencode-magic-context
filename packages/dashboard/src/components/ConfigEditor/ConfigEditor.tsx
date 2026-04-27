@@ -357,8 +357,11 @@ function ConfigForm(props: {
     // Merge form data with original to preserve unknown keys
     const original = parsed();
     const merged = { ...original, ...formData() };
-    // Deep merge for nested objects
-    for (const key of ["embedding", "memory"]) {
+    // Deep merge for nested objects so we don't blow away sub-keys the form
+    // doesn't currently expose (e.g. user-set values inside `experimental.*`
+    // sub-objects that the UI doesn't render). The shallow `...formData()`
+    // above would otherwise replace the whole sub-tree.
+    for (const key of ["embedding", "memory", "experimental"]) {
       if (typeof formData()[key] === "object" && formData()[key] != null) {
         merged[key] = {
           ...((original[key] as Record<string, unknown>) ?? {}),
@@ -1529,6 +1532,346 @@ function ConfigForm(props: {
               </div>
             </div>
           </div>
+
+          {/* Experimental — opt-in features gated behind `experimental.*` flags.
+              May change between releases. Rendered before Tags & Cleanup so the
+              "advanced" surface stays at the bottom of the form. Each feature is
+              a master toggle; child controls only appear when the feature is on,
+              keeping the surface compact for users who never enable any of them. */}
+          {(() => {
+            const exp = () =>
+              (getNestedValue(formData(), "experimental") as
+                | Record<string, Record<string, unknown> | boolean>
+                | undefined) ?? {};
+            const setExperimentalKey = (key: string, value: unknown) => {
+              handleFieldChange("experimental", { ...exp(), [key]: value });
+            };
+
+            // temporal_awareness — boolean (no children)
+            const temporalAwareness = () => Boolean(exp().temporal_awareness);
+
+            // git_commit_indexing — { enabled, since_days, max_commits }
+            const gitCommit = () =>
+              (exp().git_commit_indexing as
+                | { enabled?: boolean; since_days?: number; max_commits?: number }
+                | undefined) ?? {};
+            const gitCommitEnabled = () => Boolean(gitCommit().enabled);
+            const gitCommitSinceDays = () => gitCommit().since_days ?? 365;
+            const gitCommitMaxCommits = () => gitCommit().max_commits ?? 2000;
+
+            // auto_search — { enabled, score_threshold, min_prompt_chars }
+            const autoSearch = () =>
+              (exp().auto_search as
+                | { enabled?: boolean; score_threshold?: number; min_prompt_chars?: number }
+                | undefined) ?? {};
+            const autoSearchEnabled = () => Boolean(autoSearch().enabled);
+            const autoSearchScoreThreshold = () => autoSearch().score_threshold ?? 0.55;
+            const autoSearchMinChars = () => autoSearch().min_prompt_chars ?? 20;
+
+            // caveman_text_compression — { enabled, min_chars }
+            const caveman = () =>
+              (exp().caveman_text_compression as
+                | { enabled?: boolean; min_chars?: number }
+                | undefined) ?? {};
+            const cavemanEnabled = () => Boolean(caveman().enabled);
+            const cavemanMinChars = () => caveman().min_chars ?? 500;
+
+            const ctxReduceEnabled = () => {
+              const v = getNestedValue(formData(), "ctx_reduce_enabled");
+              return v == null ? true : Boolean(v);
+            };
+
+            return (
+              <div class="config-card full-width">
+                <div class="config-card-header">
+                  <span class="config-card-icon">🧪</span>
+                  <span class="config-card-title">Experimental</span>
+                </div>
+                <div class="config-card-content">
+                  <div
+                    class="config-field-desc"
+                    style={{ "margin-bottom": "8px", opacity: "0.85" }}
+                  >
+                    Opt-in features that may change between releases. Disabled by default.
+                  </div>
+
+                  {/* Temporal awareness */}
+                  <div class="config-field">
+                    <div class="config-field-header">
+                      <span class="config-field-label">Temporal Awareness</span>
+                      <span class="config-field-key">experimental.temporal_awareness</span>
+                    </div>
+                    <span class="config-field-desc">
+                      Inject elapsed-time markers (e.g. <code>+12m</code>, <code>+3d 4h</code>)
+                      between user messages with &gt;5 min gaps, and add{" "}
+                      <code>start-date</code>/<code>end-date</code> attributes on rendered
+                      compartments. Helps the agent reason about session pacing across long-running
+                      and multi-day sessions.
+                    </span>
+                    <label class="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={temporalAwareness()}
+                        onChange={(e) =>
+                          setExperimentalKey("temporal_awareness", e.currentTarget.checked)
+                        }
+                      />
+                      <span class="toggle-slider" />
+                      <span class="toggle-label">
+                        {temporalAwareness() ? "Enabled" : "Disabled"}
+                      </span>
+                    </label>
+                  </div>
+
+                  {/* Git commit indexing */}
+                  <div class="config-field">
+                    <div class="config-field-header">
+                      <span class="config-field-label">Git Commit Indexing</span>
+                      <span class="config-field-key">experimental.git_commit_indexing.enabled</span>
+                    </div>
+                    <span class="config-field-desc">
+                      Index <code>HEAD</code> non-merge commits into <code>ctx_search</code> as a
+                      4th source alongside memories, facts, and message history. Useful for
+                      agents recalling regressions, prior fixes, and decisions without running{" "}
+                      <code>git log</code> manually.
+                    </span>
+                    <label class="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={gitCommitEnabled()}
+                        onChange={(e) =>
+                          setExperimentalKey("git_commit_indexing", {
+                            ...gitCommit(),
+                            enabled: e.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <span class="toggle-slider" />
+                      <span class="toggle-label">
+                        {gitCommitEnabled() ? "Enabled" : "Disabled"}
+                      </span>
+                    </label>
+                  </div>
+
+                  <Show when={gitCommitEnabled()}>
+                    <div class="config-field">
+                      <div class="config-field-header">
+                        <span class="config-field-label">History Window (days)</span>
+                        <span class="config-field-key">
+                          experimental.git_commit_indexing.since_days
+                        </span>
+                      </div>
+                      <span class="config-field-desc">
+                        Days of HEAD history to index. Older commits are excluded from search.
+                        Range 7–3650, default 365.
+                      </span>
+                      <input
+                        class="config-input"
+                        type="number"
+                        min={7}
+                        max={3650}
+                        value={gitCommitSinceDays()}
+                        onInput={(e) => {
+                          const v = e.currentTarget.value;
+                          setExperimentalKey("git_commit_indexing", {
+                            ...gitCommit(),
+                            since_days: v ? Math.max(7, Math.min(3650, Number(v))) : 365,
+                          });
+                        }}
+                      />
+                    </div>
+                    <div class="config-field">
+                      <div class="config-field-header">
+                        <span class="config-field-label">Max Commits</span>
+                        <span class="config-field-key">
+                          experimental.git_commit_indexing.max_commits
+                        </span>
+                      </div>
+                      <span class="config-field-desc">
+                        Maximum commits kept per project. Oldest evicted when the cap is reached.
+                        Range 100–20000, default 2000.
+                      </span>
+                      <input
+                        class="config-input"
+                        type="number"
+                        min={100}
+                        max={20000}
+                        value={gitCommitMaxCommits()}
+                        onInput={(e) => {
+                          const v = e.currentTarget.value;
+                          setExperimentalKey("git_commit_indexing", {
+                            ...gitCommit(),
+                            max_commits: v ? Math.max(100, Math.min(20000, Number(v))) : 2000,
+                          });
+                        }}
+                      />
+                    </div>
+                  </Show>
+
+                  {/* Auto search */}
+                  <div class="config-field">
+                    <div class="config-field-header">
+                      <span class="config-field-label">Auto Search Hint</span>
+                      <span class="config-field-key">experimental.auto_search.enabled</span>
+                    </div>
+                    <span class="config-field-desc">
+                      On each new user message, run <code>ctx_search</code> in the background and
+                      append a compact <code>&lt;ctx-search-hint&gt;</code> block of vague
+                      fragments when the top hit clears the score threshold. Does NOT inject full
+                      content — just nudges the agent to run <code>ctx_search</code> for the real
+                      result if relevant. Adds one embedding round-trip per new user turn.
+                    </span>
+                    <label class="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={autoSearchEnabled()}
+                        onChange={(e) =>
+                          setExperimentalKey("auto_search", {
+                            ...autoSearch(),
+                            enabled: e.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <span class="toggle-slider" />
+                      <span class="toggle-label">
+                        {autoSearchEnabled() ? "Enabled" : "Disabled"}
+                      </span>
+                    </label>
+                  </div>
+
+                  <Show when={autoSearchEnabled()}>
+                    <div class="config-field">
+                      <div class="config-field-header">
+                        <span class="config-field-label">Score Threshold</span>
+                        <span class="config-field-key">
+                          experimental.auto_search.score_threshold
+                        </span>
+                      </div>
+                      <span class="config-field-desc">
+                        Minimum top-hit score for the hint to fire. Higher = fewer but more
+                        relevant hints. Range 0.30–0.95, default 0.55.
+                      </span>
+                      <input
+                        class="config-input"
+                        type="number"
+                        min={0.3}
+                        max={0.95}
+                        step={0.05}
+                        value={autoSearchScoreThreshold()}
+                        onInput={(e) => {
+                          const v = e.currentTarget.value;
+                          setExperimentalKey("auto_search", {
+                            ...autoSearch(),
+                            score_threshold: v ? Math.max(0.3, Math.min(0.95, Number(v))) : 0.55,
+                          });
+                        }}
+                      />
+                    </div>
+                    <div class="config-field">
+                      <div class="config-field-header">
+                        <span class="config-field-label">Min Prompt Chars</span>
+                        <span class="config-field-key">
+                          experimental.auto_search.min_prompt_chars
+                        </span>
+                      </div>
+                      <span class="config-field-desc">
+                        Skip the hint when a user message is shorter than this. Avoids embedding
+                        cost on trivial replies. Range 5–500, default 20.
+                      </span>
+                      <input
+                        class="config-input"
+                        type="number"
+                        min={5}
+                        max={500}
+                        value={autoSearchMinChars()}
+                        onInput={(e) => {
+                          const v = e.currentTarget.value;
+                          setExperimentalKey("auto_search", {
+                            ...autoSearch(),
+                            min_prompt_chars: v ? Math.max(5, Math.min(500, Number(v))) : 20,
+                          });
+                        }}
+                      />
+                    </div>
+                  </Show>
+
+                  {/* Caveman text compression */}
+                  <div class="config-field">
+                    <div class="config-field-header">
+                      <span class="config-field-label">Caveman Text Compression</span>
+                      <span class="config-field-key">
+                        experimental.caveman_text_compression.enabled
+                      </span>
+                    </div>
+                    <span class="config-field-desc">
+                      Age-tiered compression for long user/assistant text parts.{" "}
+                      <strong>
+                        Only active when Agent Controlled Reduction (
+                        <code>ctx_reduce_enabled</code>) is OFF.
+                      </strong>{" "}
+                      Outside the protected tail, oldest 20% of eligible tags get ultra
+                      compression, next 20% full, next 20% lite, newest 40% untouched. Always
+                      compresses from the original source, so depth shifts are equivalent to
+                      compressing the original text directly.
+                    </span>
+                    <Show when={ctxReduceEnabled() && cavemanEnabled()}>
+                      <div
+                        class="config-field-desc"
+                        style={{ color: "var(--color-warning, #c8881f)", "margin-bottom": "4px" }}
+                      >
+                        ⚠️ Caveman compression has no effect while Agent Controlled Reduction is
+                        enabled. Disable <code>ctx_reduce_enabled</code> in General to use this.
+                      </div>
+                    </Show>
+                    <label class="toggle-switch">
+                      <input
+                        type="checkbox"
+                        checked={cavemanEnabled()}
+                        onChange={(e) =>
+                          setExperimentalKey("caveman_text_compression", {
+                            ...caveman(),
+                            enabled: e.currentTarget.checked,
+                          })
+                        }
+                      />
+                      <span class="toggle-slider" />
+                      <span class="toggle-label">{cavemanEnabled() ? "Enabled" : "Disabled"}</span>
+                    </label>
+                  </div>
+
+                  <Show when={cavemanEnabled()}>
+                    <div class="config-field">
+                      <div class="config-field-header">
+                        <span class="config-field-label">Min Chars</span>
+                        <span class="config-field-key">
+                          experimental.caveman_text_compression.min_chars
+                        </span>
+                      </div>
+                      <span class="config-field-desc">
+                        Text parts shorter than this are left untouched. Range 100–10000,
+                        default 500.
+                      </span>
+                      <input
+                        class="config-input"
+                        type="number"
+                        min={100}
+                        max={10000}
+                        step={50}
+                        value={cavemanMinChars()}
+                        onInput={(e) => {
+                          const v = e.currentTarget.value;
+                          setExperimentalKey("caveman_text_compression", {
+                            ...caveman(),
+                            min_chars: v ? Math.max(100, Math.min(10000, Number(v))) : 500,
+                          });
+                        }}
+                      />
+                    </div>
+                  </Show>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Tags & Cleanup — rendered after agent cards */}
           {(() => {
