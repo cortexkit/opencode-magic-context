@@ -8,14 +8,136 @@ function escapeRegex(value: string): string {
 }
 
 /**
- * Replace absolute home paths and usernames in captured log lines so users
- * can share reports publicly without leaking their local paths.
+ * Secret-token redaction patterns. Council finding #9 (8/9 members):
+ * the original sanitizer only stripped paths and usernames, so any log line
+ * carrying an API token, AWS key, GitHub PAT, or other credential would
+ * land verbatim in the user-shareable issue report.
+ *
+ * Each entry maps a regex to the replacement string. Patterns are
+ * intentionally narrow — overzealous matching would mangle log content
+ * and false-redact legitimate identifiers (e.g. session IDs, model
+ * names). When in doubt we prefer to under-redact and let the user
+ * notice rather than over-redact and make logs incomprehensible.
+ *
+ * Order matters: check the more specific token shapes first so a generic
+ * fallback doesn't swallow a credential we recognize.
+ */
+const SECRET_PATTERNS: Array<{
+    name: string;
+    pattern: RegExp;
+    /** Replacement; if it's a function, the matched groups are passed in. */
+    replacement: string | ((match: string, ...groups: string[]) => string);
+}> = [
+    // Anthropic API keys: sk-ant-api03-... or sk-ant-...
+    {
+        name: "anthropic_api_key",
+        pattern: /\bsk-ant-(?:api03-)?[A-Za-z0-9_-]{32,}/g,
+        replacement: "<ANTHROPIC_API_KEY_REDACTED>",
+    },
+    // OpenAI API keys: sk-... (legacy) and sk-proj-... (project)
+    {
+        name: "openai_api_key",
+        pattern: /\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}/g,
+        replacement: "<OPENAI_API_KEY_REDACTED>",
+    },
+    // GitHub fine-grained PATs (github_pat_...) and classic tokens
+    {
+        name: "github_pat_fine_grained",
+        pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
+        replacement: "<GITHUB_PAT_REDACTED>",
+    },
+    {
+        name: "github_token_classic",
+        pattern: /\b(?:gh[opsu]|ghr)_[A-Za-z0-9]{30,}/g,
+        replacement: "<GITHUB_TOKEN_REDACTED>",
+    },
+    // HuggingFace tokens: hf_... (typically 30+ char alphanumeric)
+    {
+        name: "huggingface_token",
+        pattern: /\bhf_[A-Za-z0-9]{30,}/g,
+        replacement: "<HUGGINGFACE_TOKEN_REDACTED>",
+    },
+    // AWS access keys: AKIA... (20 chars total) or ASIA... (temp creds)
+    {
+        name: "aws_access_key_id",
+        pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+        replacement: "<AWS_ACCESS_KEY_ID_REDACTED>",
+    },
+    // AWS secret access keys: 40-char base64-ish, only redact when in
+    // an obvious assignment context to avoid false positives on hashes.
+    {
+        name: "aws_secret_access_key",
+        pattern: /\b(aws[_-]?secret[_-]?access[_-]?key\s*[=:]\s*)([A-Za-z0-9/+=]{40})\b/gi,
+        replacement: (_full: string, prefix: string) => `${prefix}<AWS_SECRET_REDACTED>`,
+    },
+    // Slack tokens: xox[abprs]-... (bot, user, etc.)
+    {
+        name: "slack_token",
+        pattern: /\bxox[abprsuvc]-[A-Za-z0-9-]{10,}/g,
+        replacement: "<SLACK_TOKEN_REDACTED>",
+    },
+    // Google API keys: AIza... (39 chars)
+    {
+        name: "google_api_key",
+        pattern: /\bAIza[A-Za-z0-9_-]{35}\b/g,
+        replacement: "<GOOGLE_API_KEY_REDACTED>",
+    },
+    // Generic env-var assignments where the key name suggests a secret.
+    // Matches `FOO_API_KEY=value`, `BAR_TOKEN=value`, `BAZ_SECRET=value`,
+    // `QUX_PASSWORD=value` in shell-export form. Keeps the variable name
+    // visible (useful for debugging) but redacts the value.
+    {
+        name: "secret_env_assignment",
+        pattern:
+            /\b([A-Z][A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE[_-]?KEY))\s*=\s*([^\s'"]+)/g,
+        replacement: (_full: string, key: string) => `${key}=<REDACTED>`,
+    },
+    // JSON-style secret assignments: "api_key": "value", "token": "value", etc.
+    // Matches the JSON spelling in config files / structured logs. Redacts
+    // the value but keeps the key visible.
+    {
+        name: "secret_json_assignment",
+        pattern:
+            /("(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|client[_-]?secret|password|private[_-]?key|secret[_-]?key)"\s*:\s*)"([^"]+)"/gi,
+        replacement: (_full: string, prefix: string) => `${prefix}"<REDACTED>"`,
+    },
+    // Bearer tokens in HTTP headers: `Authorization: Bearer eyJ...`
+    {
+        name: "bearer_token",
+        pattern: /\b(Authorization\s*:\s*Bearer\s+)([A-Za-z0-9._~+/=-]{16,})/gi,
+        replacement: (_full: string, prefix: string) => `${prefix}<BEARER_TOKEN_REDACTED>`,
+    },
+    // JWT tokens (common in API responses): three base64url segments
+    // separated by dots. Conservative match: requires the standard JWT
+    // header prefix `eyJ` to avoid false positives on arbitrary base64.
+    {
+        name: "jwt_token",
+        pattern: /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+        replacement: "<JWT_REDACTED>",
+    },
+];
+
+/**
+ * Replace absolute home paths, usernames, and known secret-token shapes in
+ * captured log lines so users can share reports publicly without leaking
+ * local paths or credentials.
+ *
+ * Order of operations matters:
+ *   1. Path/user redaction first — paths are deterministic and the
+ *      easiest to match, doing them before token redaction means
+ *      tokens never appear inside a path-resolved replacement.
+ *   2. Secret-token redaction in `SECRET_PATTERNS` order — more
+ *      specific shapes (provider-prefixed keys) before generic
+ *      assignment patterns, so a known shape doesn't get caught
+ *      twice.
  */
 export function sanitizeLogContent(content: string): string {
     const home = homedir();
     const username = userInfo().username;
 
     let sanitized = content;
+
+    // Phase 1: paths and usernames.
     if (home) {
         sanitized = sanitized.replace(new RegExp(escapeRegex(home), "g"), "~");
     }
@@ -25,6 +147,22 @@ export function sanitizeLogContent(content: string): string {
     if (username) {
         sanitized = sanitized.replace(new RegExp(escapeRegex(username), "g"), "<USER>");
     }
+
+    // Phase 2: secret tokens.
+    for (const { pattern, replacement } of SECRET_PATTERNS) {
+        if (typeof replacement === "string") {
+            sanitized = sanitized.replace(pattern, replacement);
+        } else {
+            // Function form needs the explicit cast because TS's
+            // String.prototype.replace overloads don't unify cleanly with
+            // (match, ...groups) => string in all tsc versions.
+            sanitized = sanitized.replace(
+                pattern,
+                replacement as (match: string, ...groups: string[]) => string,
+            );
+        }
+    }
+
     return sanitized;
 }
 
