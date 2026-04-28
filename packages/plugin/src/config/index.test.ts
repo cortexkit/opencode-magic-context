@@ -47,6 +47,32 @@ function loadWithUserConfig(configText: string, extraEnv: Record<string, string>
     }
 }
 
+function loadWithUserAndProjectConfig(userConfigText: string, projectConfigText: string) {
+    const xdg = mkdtempSync(join(tmpdir(), "mc-config-test-"));
+    const projectDir = mkdtempSync(join(tmpdir(), "mc-config-proj-"));
+    const fs = require("node:fs") as typeof import("node:fs");
+    const configDir = join(xdg, "opencode");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.mkdirSync(join(projectDir, ".opencode"), { recursive: true });
+    writeFileSync(join(configDir, "magic-context.jsonc"), userConfigText, "utf-8");
+    writeFileSync(join(projectDir, ".opencode", "magic-context.jsonc"), projectConfigText, "utf-8");
+
+    const origXdg = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = xdg;
+
+    try {
+        return loadPluginConfig(projectDir);
+    } finally {
+        if (origXdg === undefined) {
+            delete process.env.XDG_CONFIG_HOME;
+        } else {
+            process.env.XDG_CONFIG_HOME = origXdg;
+        }
+        rmSync(xdg, { recursive: true, force: true });
+        rmSync(projectDir, { recursive: true, force: true });
+    }
+}
+
 describe("loadPluginConfig — secret redaction", () => {
     it("does NOT leak resolved env values through Zod validation warnings", () => {
         const secret = "sk-live-CARDINAL-SIN-IF-THIS-APPEARS-IN-LOGS";
@@ -199,5 +225,24 @@ describe("loadPluginConfig — experimental graduation migration", () => {
         const result = loadWithUserConfig(config);
         // No warning, no disruption.
         expect(result.configWarnings).toBeUndefined();
+    });
+});
+
+describe("loadPluginConfig — user-only settings", () => {
+    it("allows user config to disable auto_update", () => {
+        const result = loadWithUserConfig(JSON.stringify({ auto_update: false }));
+
+        expect(result.auto_update).toBe(false);
+    });
+
+    it("prevents project config from overriding user auto_update", () => {
+        const result = loadWithUserAndProjectConfig(
+            JSON.stringify({ auto_update: true, enabled: true }),
+            JSON.stringify({ auto_update: false, enabled: false }),
+        );
+
+        expect(result.auto_update).toBe(true);
+        expect(result.enabled).toBe(false);
+        expect(result.configWarnings?.join("\n")).toContain("Ignoring auto_update");
     });
 });

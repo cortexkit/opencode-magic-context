@@ -46,6 +46,7 @@ describe("MagicContextConfigSchema", () => {
         it("parses an enabled config without stale reduction-specific keys", () => {
             const input = {
                 enabled: true,
+                auto_update: false,
                 ctx_reduce_enabled: true,
                 cache_ttl: "10m",
                 protected_tags: 3,
@@ -127,6 +128,11 @@ describe("MagicContextConfigSchema", () => {
                 model: "github-copilot/gpt-5.4",
                 timeout_ms: 30000,
             });
+        });
+
+        it("accepts optional auto_update user preference", () => {
+            expect(MagicContextConfigSchema.parse({ auto_update: false }).auto_update).toBe(false);
+            expect(MagicContextConfigSchema.parse({ auto_update: true }).auto_update).toBe(true);
         });
 
         it("parses per-model cache_ttl objects", () => {

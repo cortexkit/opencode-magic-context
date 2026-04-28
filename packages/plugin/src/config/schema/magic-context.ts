@@ -164,6 +164,9 @@ export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 
 export interface MagicContextConfig {
     enabled: boolean;
+    /** Auto-update the cached OpenCode plugin wrapper when a newer npm version is available.
+     *  USER config only; project configs cannot disable it. Default: true. */
+    auto_update?: boolean;
     /** When false, ctx_reduce tool is not registered, all nudges are disabled,
      *  and prompt guidance about ctx_reduce is stripped. Heuristic cleanup,
      *  compartments, memory, and other features continue to work. Default: true. */
@@ -255,6 +258,9 @@ export const MagicContextConfigSchema = z
     .object({
         /** Enable magic context (default: true) */
         enabled: z.boolean().default(true),
+        /** Enable automatic npm self-update checks for the OpenCode plugin.
+         *  Security: USER-only in config loader, so hostile project configs cannot suppress updates. */
+        auto_update: z.boolean().optional(),
         /** When false, ctx_reduce tool is hidden, all nudges disabled, and prompt
          *  guidance about ctx_reduce stripped. Heuristic cleanup, compartments,
          *  memory, and other features still work. (default: true) */

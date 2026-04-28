@@ -133,7 +133,7 @@ Create `magic-context.jsonc` in your project root, `.opencode/`, or `~/.config/o
 
 > **Tip:** The `$schema` key enables autocomplete and validation in VS Code and other editors.
 
-That's it. Everything else has sensible defaults. Project config merges on top of user-wide settings.
+That's it. Everything else has sensible defaults. Project config merges on top of user-wide settings; `auto_update` is user-config-only so projects cannot disable plugin self-updates.
 
 ### Oh-My-OpenCode / Oh-My-OpenAgent Users
 

@@ -64,10 +64,14 @@ function loadConfigFile(configPath: string): LoadedConfigFile | null {
 function mergeConfigs(
     base: MagicContextPluginConfig,
     override: MagicContextPluginConfig,
+    options: { allowUserOnlyFields?: boolean } = {},
 ): MagicContextPluginConfig {
     const config: MagicContextPluginConfig = {
         ...base,
         ...override,
+        // USER-only security boundary: project configs must not silently
+        // suppress plugin self-updates, which may include security fixes.
+        auto_update: options.allowUserOnlyFields ? override.auto_update : base.auto_update,
         // Deep-merge nested config objects so partial overrides don't lose base values
         memory: {
             ...(base.memory ?? {}),
@@ -97,6 +101,10 @@ function mergeConfigs(
     };
 
     return config;
+}
+
+function getProjectUserOnlyFields(config: Record<string, unknown>): string[] {
+    return "auto_update" in config ? ["auto_update"] : [];
 }
 
 /**
@@ -341,7 +349,7 @@ export function loadPluginConfig(
         if (parsed.configWarnings?.length) {
             allWarnings.push(...parsed.configWarnings.map((w) => `[user config] ${w}`));
         }
-        config = mergeConfigs(config, parsed);
+        config = mergeConfigs(config, parsed, { allowUserOnlyFields: true });
     }
 
     if (projectLoaded) {
@@ -349,6 +357,14 @@ export function loadPluginConfig(
         const parsed = parsePluginConfig(projectLoaded.config);
         if (parsed.configWarnings?.length) {
             allWarnings.push(...parsed.configWarnings.map((w) => `[project config] ${w}`));
+        }
+        const strippedUserOnlyFields = getProjectUserOnlyFields(projectLoaded.config);
+        if (strippedUserOnlyFields.length > 0) {
+            allWarnings.push(
+                `[project config] Ignoring ${strippedUserOnlyFields.join(
+                    ", ",
+                )} from project config (security: these settings only honor user-level config)`,
+            );
         }
         config = mergeConfigs(config, parsed);
     }
