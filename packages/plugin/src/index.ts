@@ -7,6 +7,7 @@ import { getMagicContextBuiltinCommands } from "./features/builtin-commands/comm
 import { DREAMER_SYSTEM_PROMPT } from "./features/magic-context/dreamer/task-prompts";
 import { SIDEKICK_SYSTEM_PROMPT } from "./features/magic-context/sidekick/agent";
 import { recordToolDefinition } from "./features/magic-context/tool-definition-tokens";
+import { createAutoUpdateCheckerHook } from "./hooks/auto-update-checker";
 import {
     COMPARTMENT_AGENT_SYSTEM_PROMPT,
     HISTORIAN_EDITOR_SYSTEM_PROMPT,
@@ -29,6 +30,10 @@ import { MagicContextRpcServer } from "./shared/rpc-server";
 
 const plugin: Plugin = async (ctx) => {
     const pluginConfig = loadPluginConfig(ctx.directory);
+    const autoUpdateAbort = new AbortController();
+    process.once("exit", () => {
+        autoUpdateAbort.abort();
+    });
 
     // Surface config validation warnings to user and log
     if (pluginConfig.configWarnings?.length) {
@@ -216,7 +221,13 @@ const plugin: Plugin = async (ctx) => {
 
     return {
         tool: tools,
-        event: createEventHandler({ magicContext: hooks.magicContext }),
+        event: createEventHandler({
+            magicContext: hooks.magicContext,
+            autoUpdateChecker: createAutoUpdateCheckerHook(ctx, {
+                autoUpdate: pluginConfig.auto_update !== false,
+                signal: autoUpdateAbort.signal,
+            }),
+        }),
         "experimental.chat.messages.transform": createMessagesTransformHandler({
             magicContext: hooks.magicContext,
         }),
