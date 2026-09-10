@@ -1055,8 +1055,13 @@ function copyContextMeta(
     partIds: IdMap,
 ): void {
     if (!tableExists(db, "session_meta")) return;
+    // Native replay decisions were already filtered/remapped by copySessionStateForClone.
     const metaColumns = columns(db, "session_meta").filter(
-        (column) => column.name !== "session_id" && !RETIRED_META_COLUMNS.has(column.name),
+        (column) =>
+            column.name !== "session_id" &&
+            column.name !== "pi_native_tool_inputs" &&
+            column.name !== "pi_native_reasoning_ids" &&
+            !RETIRED_META_COLUMNS.has(column.name),
     );
     const selectedColumns = ["session_id", ...metaColumns.map((column) => column.name)]
         .map(quoteIdentifier)

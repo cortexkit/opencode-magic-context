@@ -489,6 +489,45 @@ describe("clone-session", () => {
         mutable.close();
     });
 
+    it("keeps filtered native decisions after the generic metadata copy", () => {
+        const fixture = makeFixture();
+        const frozenInput = '{"path":"msg_source_1","dropped":"marker"}';
+        const source = new Database(fixture.contextPath);
+        try {
+            source.exec(`
+                ALTER TABLE session_meta ADD COLUMN pi_native_tool_inputs TEXT;
+                ALTER TABLE session_meta ADD COLUMN pi_native_reasoning_ids TEXT;
+            `);
+            source.prepare(
+                "UPDATE session_meta SET pi_native_tool_inputs = ?, pi_native_reasoning_ids = ? WHERE session_id = ?",
+            ).run(
+                JSON.stringify({ tool_source_1: frozenInput, outside_call: '{"dropped":"outside"}' }),
+                JSON.stringify(["msg_source_2", "outside_assistant"]),
+                fixture.sourceSessionId,
+            );
+        } finally {
+            source.close();
+        }
+        const result = cloneSession({
+            sessionId: fixture.sourceSessionId,
+            opencodeDbPath: fixture.opencodePath,
+            contextDbPath: fixture.contextPath,
+        });
+        const clone = new Database(fixture.contextPath, { readonly: true });
+        try {
+            const tool = clone.prepare(
+                "SELECT message_id, tool_owner_message_id FROM tags WHERE session_id = ? AND type = 'tool'",
+            ).get(result.plan.destinationSessionId) as { message_id: string; tool_owner_message_id: string };
+            const state = clone.prepare(
+                "SELECT pi_native_tool_inputs, pi_native_reasoning_ids FROM session_meta WHERE session_id = ?",
+            ).get(result.plan.destinationSessionId) as { pi_native_tool_inputs: string; pi_native_reasoning_ids: string };
+            expect(JSON.parse(state.pi_native_tool_inputs)).toEqual({ [tool.message_id]: frozenInput });
+            expect(JSON.parse(state.pi_native_reasoning_ids)).toEqual([tool.tool_owner_message_id]);
+        } finally {
+            clone.close();
+        }
+    });
+
     it("clones notes before project authority is attached and leaves the guard active", () => {
         const fixture = makeFixture();
         const context = new Database(fixture.contextPath);

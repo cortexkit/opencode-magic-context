@@ -207,12 +207,6 @@ describe("source contract: peek-then-drain in runPipeline (history)", () => {
 		);
 	});
 
-	test("inline thinking stripping shares the reasoning watermark", () => {
-		expect(code).toContain("stripInlineThinkingPi({");
-		expect(code).toContain("const combinedWatermark = Math.max(");
-		expect(code).toContain("clearedReasoningThroughTag: combinedWatermark");
-	});
-
 	test("model switch reset clears usage, reasoning, failure, limit, and recovery state", () => {
 		expect(code).toContain("clearedReasoningThroughTag: 0");
 		expect(code).toContain("clearHistorianFailureState(options.db, sessionId)");

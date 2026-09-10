@@ -75,6 +75,138 @@ describe("createPiTranscript", () => {
 		expect(transcript.getOutputMessages()).toBe(messages);
 	});
 
+	it("defers native tool input replay while retaining current Pi mutations", () => {
+		const text = "Keep the native response untouched until authorization";
+		const reasoning = {
+			type: "reasoning",
+			encrypted_content: "unrelated-encrypted-reasoning",
+		};
+		const hostedOutput = {
+			type: "image_generation_call",
+			result: "image-data",
+		};
+		const native = {
+			type: "openaiResponsesHistory",
+			dt: true,
+			items: [
+				reasoning,
+				hostedOutput,
+				{
+					type: "message",
+					role: "assistant",
+					id: "msg-answer",
+					content: [{ type: "output_text", text }],
+				},
+				{
+					type: "function_call",
+					id: "fc-sentinel",
+					call_id: "call-sentinel",
+					name: "write",
+					arguments: JSON.stringify({ content: "large original input" }),
+				},
+				{
+					type: "function_call",
+					id: "fc-text",
+					call_id: "call-text",
+					name: "edit",
+					arguments: JSON.stringify({ patch: "large original patch" }),
+				},
+				{
+					type: "function_call",
+					id: "fc-input",
+					call_id: "call-input",
+					name: "read",
+					arguments: JSON.stringify({ path: "large original file" }),
+				},
+			],
+		};
+		const nativeSnapshot = structuredClone(native);
+		const original = {
+			...assistantMessage(text, 1, {
+				content: [
+					{ type: "text", text, textSignature: "msg-answer" },
+					{
+						type: "toolCall",
+						id: "call-sentinel|fc-sentinel",
+						name: "write",
+						arguments: { content: "large original input" },
+					},
+					{
+						type: "toolCall",
+						id: "call-text|fc-text",
+						name: "edit",
+						arguments: { patch: "large original patch" },
+					},
+					{
+						type: "toolCall",
+						id: "call-input|fc-input",
+						name: "read",
+						arguments: { path: "large original file" },
+					},
+				],
+			}),
+			providerPayload: native,
+		};
+		const messages = [userMessage("prior context", 0), original];
+		const assistantMessageIndex = 1;
+		const transcript = createPiTranscript(messages, "ses-native-replay");
+		const parts = transcript.messages[assistantMessageIndex]?.parts ?? [];
+
+		expect(parts[0]?.setText("ordinary content changed")).toBe(true);
+		expect(parts[1]?.replaceWithSentinel("[dropped input]")).toBe(true);
+		expect(parts[2]?.setText("[truncated input]")).toBe(true);
+		expect(parts[3]?.setToolInput?.({ path: "short.txt" })).toBe(true);
+		expect(
+			Array.from(
+				transcript.getToolInputChanges().get(assistantMessageIndex) ?? [],
+			),
+		).toEqual([
+			"call-sentinel|fc-sentinel",
+			"call-text|fc-text",
+			"call-input|fc-input",
+		]);
+
+		transcript.commit();
+		const output = transcript.getOutputMessages() as Array<{
+			content: Array<{
+				type: string;
+				text?: string;
+				id?: string;
+				arguments?: Record<string, unknown>;
+			}>;
+			providerPayload: typeof native;
+		}>;
+		expect(output[assistantMessageIndex]?.content).toEqual([
+			{
+				type: "text",
+				text: "ordinary content changed",
+				textSignature: "msg-answer",
+			},
+			{
+				type: "toolCall",
+				id: "call-sentinel|fc-sentinel",
+				name: "write",
+				arguments: { dropped: "[dropped input]" },
+			},
+			{
+				type: "toolCall",
+				id: "call-text|fc-text",
+				name: "edit",
+				arguments: { __magic_context_replacement__: "[truncated input]" },
+			},
+			{
+				type: "toolCall",
+				id: "call-input|fc-input",
+				name: "read",
+				arguments: { path: "short.txt" },
+			},
+		]);
+		expect(output[assistantMessageIndex]?.providerPayload).toBe(native);
+		expect(output[assistantMessageIndex]?.providerPayload).toEqual(
+			nativeSnapshot,
+		);
+	});
+
 	it("leaves Pi and OMP whitespace-only assistant framing untagged after peeling MC tags", () => {
 		const vectors = [
 			{

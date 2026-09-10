@@ -11,6 +11,12 @@ import {
 	getSourceContents,
 	getTagsBySession,
 } from "@magic-context/core/features/magic-context/storage";
+import {
+	addNativeReasoningIds,
+	getNativeReasoningIds,
+	getNativeToolInputs,
+	saveNativeToolInputs,
+} from "@magic-context/core/features/magic-context/storage-native-replay";
 import { replayCavemanCompression } from "@magic-context/core/hooks/magic-context/caveman-cleanup";
 import type { TagTarget } from "@magic-context/core/hooks/magic-context/tag-messages";
 import type { Database } from "@magic-context/core/shared/sqlite";
@@ -646,6 +652,65 @@ describe("Pi clone state inheritance", () => {
 			.get("clone") as { placeholders: string; images: string };
 		expect(JSON.parse(row.placeholders)).toEqual(["a1"]);
 		expect(JSON.parse(row.images)).toEqual(["u1"]);
+	});
+
+	it("carries only retained native tool and reasoning decisions into a remapped clone", () => {
+		const database = db();
+		const retainedInput =
+			'{"path":"src/retained.ts","range":{"start":10,"end":40},"marker":"[truncated]"}';
+		seedTag(database, {
+			tagNumber: 1,
+			messageId: "call-retained",
+			type: "tool",
+			ownerId: "assistant-retained",
+		});
+		seedTag(database, {
+			tagNumber: 2,
+			messageId: "call-outside",
+			type: "tool",
+			ownerId: "assistant-outside",
+		});
+		saveNativeToolInputs(
+			database,
+			"source",
+			new Map([
+				["call-retained", retainedInput],
+				["call-outside", '{"path":"src/outside.ts"}'],
+			]),
+		);
+		addNativeReasoningIds(database, "source", [
+			"assistant-retained",
+			"assistant-outside",
+		]);
+
+		const filter: CloneSessionStateFilter = {
+			resolveBoundaryOrdinal: () => undefined,
+			includeTag: (tag) =>
+				tag.type === "tool" && tag.toolOwnerMessageId === "assistant-retained",
+			includeMessageId: (id) => id === "assistant-retained",
+			mapMessageId: (id) =>
+				id === "assistant-retained"
+					? "clone-assistant-retained"
+					: id === "call-retained"
+						? "clone-call-retained"
+						: id,
+			selectPendingPiMarker: () => null,
+		};
+
+		const result = copySessionStateForClone(
+			database,
+			"source",
+			"clone",
+			filter,
+		);
+
+		expect(result.tagsCopied).toBe(1);
+		expect(getNativeToolInputs(database, "clone")).toEqual(
+			new Map([["clone-call-retained", retainedInput]]),
+		);
+		expect(getNativeReasoningIds(database, "clone")).toEqual(
+			new Set(["clone-assistant-retained"]),
+		);
 	});
 
 	it("leaves every m0/m1 cache field fresh so the first pass hard-materializes", () => {

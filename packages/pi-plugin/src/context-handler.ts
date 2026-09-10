@@ -223,6 +223,11 @@ import {
 	prepareCachedM0M1PiReplay,
 	trimPiMessagesToCachedBoundary,
 } from "./inject-compartments-pi";
+import { canClearNativeReasoning } from "./native-replay-pi";
+import {
+	applyNativeReasoningReplayPi,
+	applyNativeToolInputReplayPi,
+} from "./native-replay-state-pi";
 import { hasVisibleNoteReadCallPi } from "./note-visibility-pi";
 import {
 	resolvePiUsableContextLimit,
@@ -3103,6 +3108,7 @@ export function registerPiContextHandler(
 					clearReasoningAge:
 						options.heuristics?.clearReasoningAge ??
 						DEFAULT_CLEAR_REASONING_AGE,
+					nativeReasoningMayClear: canClearNativeReasoning(ctx.model),
 				},
 				canUseEmptySentinels,
 				temporalAwareness: options.injection?.temporalAwareness === true,
@@ -4546,6 +4552,7 @@ interface RunPipelineArgs {
 	 */
 	reasoningClearing?: {
 		clearReasoningAge: number;
+		nativeReasoningMayClear: boolean;
 	};
 	/** True only when the active provider filters empty sentinel content safely. */
 	canUseEmptySentinels: boolean;
@@ -4648,7 +4655,10 @@ function captureReasoningMutationRollback(
 	}> = [];
 	for (const raw of messages) {
 		if (!raw || typeof raw !== "object") continue;
-		const message = raw as { role?: unknown; content?: unknown };
+		const message = raw as {
+			role?: unknown;
+			content?: unknown;
+		};
 		if (message.role !== "assistant" || !Array.isArray(message.content))
 			continue;
 		for (const rawPart of message.content) {
@@ -5659,6 +5669,7 @@ async function runPipeline(args: RunPipelineArgs): Promise<RunPipelineResult> {
 	// materialization passes where heuristics DO run — leaving reasoning on the
 	// wire on a pass that already dropped tools (inconsistent + a missed
 	// same-pass mutation). shouldRunHeuristics is the broader, correct set.
+	let reasoningPersistenceFailed = false;
 	if (args.reasoningClearing && shouldRunHeuristics && routineCleanupApplied) {
 		const rollbackReasoning = captureReasoningMutationRollback(workingMessages);
 		try {
@@ -5704,6 +5715,7 @@ async function runPipeline(args: RunPipelineArgs): Promise<RunPipelineResult> {
 				executedWorkThisPass = true;
 			}
 		} catch (err) {
+			reasoningPersistenceFailed = true;
 			// Never ship cleared reasoning unless replay state persisted. Restoring the
 			// pre-cleanup parts keeps this pass byte-stable and lets the next execute
 			// pass retry the watermark write.
@@ -5833,6 +5845,34 @@ async function runPipeline(args: RunPipelineArgs): Promise<RunPipelineResult> {
 	const tTranscriptCommit = performance.now();
 	transcript.commit();
 	logTransformTiming(args.sessionId, "transcriptCommit", tTranscriptCommit);
+
+	// Legacy drop/watermark state does not authorize first native activation.
+	// Use committed canonical inputs, then publish only persisted native decisions.
+	const nativeInputsApplied = applyNativeToolInputReplayPi({
+		db: args.db,
+		sessionId: args.sessionId,
+		messages: args.messages,
+		changes: transcript.getToolInputChanges(),
+		canApply: isCacheBustingPass,
+	});
+	const nativeReasoningApplied = args.reasoningClearing
+		? applyNativeReasoningReplayPi({
+				db: args.db,
+				sessionId: args.sessionId,
+				messages: args.messages,
+				messageIdToMaxTag,
+				stableId: stableIdResolver,
+				localWatermark: args.sessionMeta.clearedReasoningThroughTag ?? 0,
+				clearReasoningAge: args.reasoningClearing.clearReasoningAge,
+				omissionAllowed: args.reasoningClearing.nativeReasoningMayClear,
+				canApply: isCacheBustingPass && !reasoningPersistenceFailed,
+				detectAged: shouldRunHeuristics && routineCleanupApplied,
+			})
+		: 0;
+	if (nativeInputsApplied > 0 || nativeReasoningApplied > 0) {
+		heuristicOrReasoningDidMutate = true;
+		executedWorkThisPass = true;
+	}
 	if (toolReclaimApplicationOpportunity) {
 		advanceToolReclaimWatermarkToCurrentMax(args.db, args.sessionId);
 	}

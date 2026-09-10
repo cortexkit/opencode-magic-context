@@ -1,5 +1,6 @@
 import { getHarness } from "../../shared/harness";
 import type { Database } from "../../shared/sqlite";
+import { getNativeReasoningIds, getNativeToolInputs } from "./storage-native-replay";
 
 export interface CloneCompartmentRow {
     sequence: number;
@@ -220,6 +221,38 @@ function filterIdBlob(raw: string | null, filter: CloneSessionStateFilter): stri
     }
 }
 
+function filterNativeToolInputs(
+    inputs: ReadonlyMap<string, string>,
+    copiedToolCallIds: ReadonlySet<string>,
+    filter: CloneSessionStateFilter,
+): string {
+    const filtered = new Map<string, string>();
+    for (const [sourceId, serializedInput] of inputs) {
+        if (!copiedToolCallIds.has(sourceId)) continue;
+        const destinationId = mapMessageId(filter, sourceId);
+        if (destinationId === null) continue;
+        const existing = filtered.get(destinationId);
+        if (existing !== undefined && existing !== serializedInput) {
+            throw new Error(`native tool input clone collision for ${destinationId}`);
+        }
+        filtered.set(destinationId, serializedInput);
+    }
+    return JSON.stringify(Object.fromEntries(filtered));
+}
+
+function filterNativeReasoningIds(
+    ids: ReadonlySet<string>,
+    filter: CloneSessionStateFilter,
+): string {
+    const filtered = new Set<string>();
+    for (const sourceId of ids) {
+        if (!filter.includeMessageId(sourceId)) continue;
+        const destinationId = mapMessageId(filter, sourceId);
+        if (destinationId !== null) filtered.add(destinationId);
+    }
+    return JSON.stringify([...filtered]);
+}
+
 function clampWatermark(value: number | null, maxCopiedTag: number): number {
     if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
     return Math.min(Math.floor(value), maxCopiedTag);
@@ -323,6 +356,7 @@ export function copySessionStateForClone(
         );
         const copiedTagNumbers: number[] = [];
         const copiedTagIds = new Map<number, number>();
+        const copiedToolCallIds = new Set<string>();
         for (const row of sourceTags) {
             if (
                 !filter.includeTag({
@@ -363,6 +397,7 @@ export function copySessionStateForClone(
                 : sourceTagId;
             copiedTagIds.set(sourceTagId, destinationTagId);
             copiedTagNumbers.push(row.tag_number);
+            if (row.type === "tool") copiedToolCallIds.add(row.message_id);
         }
 
         if (copiedTagNumbers.length > 0) {
@@ -491,6 +526,31 @@ export function copySessionStateForClone(
             migrateTodo ? (mapMessageId(filter, todoAnchor) ?? "") : "",
             migrateTodo ? (meta?.todo_synthetic_state_json ?? "") : "",
         );
+        // The clone CLI also opens older databases without migrating their schema.
+        const metaColumns = new Set(
+            (db.prepare("PRAGMA table_info(session_meta)").all() as Array<{ name: string }>).map(
+                (column) => column.name,
+            ),
+        );
+        if (metaColumns.has("pi_native_tool_inputs")) {
+            const inputs = filterNativeToolInputs(
+                getNativeToolInputs(db, sourceSessionId),
+                copiedToolCallIds,
+                filter,
+            );
+            db.prepare(
+                "UPDATE session_meta SET pi_native_tool_inputs = ? WHERE session_id = ?",
+            ).run(inputs, destinationSessionId);
+        }
+        if (metaColumns.has("pi_native_reasoning_ids")) {
+            const ids = filterNativeReasoningIds(
+                getNativeReasoningIds(db, sourceSessionId),
+                filter,
+            );
+            db.prepare(
+                "UPDATE session_meta SET pi_native_reasoning_ids = ? WHERE session_id = ?",
+            ).run(ids, destinationSessionId);
+        }
 
         const pendingOpsRow = db
             .prepare("SELECT COUNT(*) AS count FROM pending_ops WHERE session_id = ?")

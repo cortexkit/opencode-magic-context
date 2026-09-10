@@ -1816,6 +1816,8 @@ CREATE INDEX IF NOT EXISTS idx_dream_queue_pending ON dream_queue(started_at, en
     ensureColumn(db, "session_meta", "historian_last_failure_at", "INTEGER DEFAULT NULL");
     ensureColumn(db, "session_meta", "system_prompt_hash", "TEXT DEFAULT ''");
     ensureColumn(db, "session_meta", "cleared_reasoning_through_tag", "INTEGER DEFAULT 0");
+    ensureColumn(db, "session_meta", "pi_native_tool_inputs", "TEXT DEFAULT NULL");
+    ensureColumn(db, "session_meta", "pi_native_reasoning_ids", "TEXT NOT NULL DEFAULT '[]'");
     ensureColumn(db, "session_meta", "tool_reclaim_watermark", "INTEGER DEFAULT 0");
     ensureColumn(db, "session_meta", "stripped_placeholder_ids", "TEXT DEFAULT ''");
     // Frozen replay watermark for the stale-ctx_reduce strip: message ids whose
